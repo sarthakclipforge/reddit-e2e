@@ -5,6 +5,7 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         const { hook, concept, scriptsPrompt } = body;
+        const apiKeyOverride = request.headers.get('x-groq-api-key') || undefined;
 
         if (!hook || !concept) {
             return NextResponse.json(
@@ -13,9 +14,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const scripts = await generateVideoScripts(hook, concept, scriptsPrompt || undefined);
+        const { scripts, rateLimit } = await generateVideoScripts(hook, concept, scriptsPrompt || undefined, apiKeyOverride);
 
-        return NextResponse.json(scripts);
+        return NextResponse.json({ ...scripts, rateLimit });
     } catch (error) {
         console.error('Error in generate-scripts route:', error);
         return NextResponse.json(

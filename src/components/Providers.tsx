@@ -6,6 +6,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/sonner';
+import { ApiUsageProvider } from '@/context/ApiUsageContext';
 import { useState } from 'react';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -22,7 +23,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
     return (
         <QueryClientProvider client={queryClient}>
-            {children}
+            <ApiUsageProvider>
+                {children}
+            </ApiUsageProvider>
             <Toaster richColors position="bottom-right" />
         </QueryClientProvider>
     );

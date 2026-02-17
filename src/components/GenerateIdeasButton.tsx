@@ -5,6 +5,8 @@ import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { RedditPost, ContentIdea } from "@/types";
 import { PROMPT_KEYS, getPrompt, DEFAULT_IDEAS_PROMPT, DEFAULT_HOOKS_PROMPT } from "@/lib/promptStore";
+import { useApiUsage } from "@/context/ApiUsageContext";
+import { getStoredApiKey } from "@/components/ApiKeyManager";
 
 interface GenerateIdeasButtonProps {
     posts: RedditPost[];
@@ -17,6 +19,7 @@ export default function GenerateIdeasButton({
     onIdeasGenerated,
 }: GenerateIdeasButtonProps) {
     const [loading, setLoading] = useState(false);
+    const { updateUsage } = useApiUsage();
 
     const handleGenerate = async () => {
         if (posts.length === 0) return;
@@ -26,12 +29,18 @@ export default function GenerateIdeasButton({
             // Read custom prompts from localStorage (if any)
             const ideasPrompt = getPrompt(PROMPT_KEYS.IDEAS, DEFAULT_IDEAS_PROMPT);
             const hooksPrompt = getPrompt(PROMPT_KEYS.HOOKS, DEFAULT_HOOKS_PROMPT);
+            const userApiKey = getStoredApiKey();
+
+            const headers: Record<string, string> = {
+                "Content-Type": "application/json",
+            };
+            if (userApiKey) {
+                headers["x-groq-api-key"] = userApiKey;
+            }
 
             const response = await fetch("/api/analyze", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers,
                 body: JSON.stringify({ posts, ideasPrompt, hooksPrompt }),
             });
 
@@ -39,6 +48,11 @@ export default function GenerateIdeasButton({
 
             if (!response.ok) {
                 throw new Error(data.error || "Failed to generate ideas");
+            }
+
+            // Update API usage bar
+            if (data.rateLimit) {
+                updateUsage(data.rateLimit);
             }
 
             onIdeasGenerated(data.ideas);

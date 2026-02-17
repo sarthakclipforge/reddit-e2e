@@ -10,6 +10,8 @@ import {
 } from "@/components/ui/dialog";
 import { Copy, Sparkles, Check, Lightbulb, Target, Megaphone, Flame, Clapperboard, X } from "lucide-react";
 import { PROMPT_KEYS, getPrompt, DEFAULT_SCRIPTS_PROMPT } from "@/lib/promptStore";
+import { useApiUsage } from "@/context/ApiUsageContext";
+import { getStoredApiKey } from "@/components/ApiKeyManager";
 import { useState } from "react";
 import { ContentIdea, VideoScripts } from "@/types";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +38,7 @@ export default function IdeasList({ ideas }: IdeasListProps) {
     const [scripts, setScripts] = useState<Record<number, VideoScripts>>({});
     const [dialogOpen, setDialogOpen] = useState(false);
     const [activeScriptIndex, setActiveScriptIndex] = useState<number | null>(null);
+    const { updateUsage } = useApiUsage();
 
     const copyToClipboard = async (idea: ContentIdea, index: number) => {
         const hooksText = idea.hooks && idea.hooks.length > 0
@@ -64,9 +67,17 @@ export default function IdeasList({ ideas }: IdeasListProps) {
     const handleGenerateScripts = async (idea: ContentIdea, index: number) => {
         setScriptLoading(index);
         try {
+            const userApiKey = getStoredApiKey();
+            const headers: Record<string, string> = {
+                "Content-Type": "application/json",
+            };
+            if (userApiKey) {
+                headers["x-groq-api-key"] = userApiKey;
+            }
+
             const response = await fetch("/api/generate-scripts", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers,
                 body: JSON.stringify({
                     hook: idea.hook,
                     concept: idea.concept,
@@ -79,8 +90,12 @@ export default function IdeasList({ ideas }: IdeasListProps) {
             if (!response.ok) {
                 throw new Error(data.error || "Failed to generate scripts");
             }
+            // Update API usage bar
+            if (data.rateLimit) {
+                updateUsage(data.rateLimit);
+            }
 
-            setScripts(prev => ({ ...prev, [index]: data }));
+            setScripts(prev => ({ ...prev, [index]: { variation1: data.variation1, variation2: data.variation2 } }));
             setActiveScriptIndex(index);
             setDialogOpen(true);
         } catch (error) {

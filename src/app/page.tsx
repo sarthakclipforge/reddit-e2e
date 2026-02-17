@@ -82,7 +82,7 @@ export default function HomePage() {
 
       {/* Features Grid */}
       <section className="container mx-auto px-4 pb-20">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-12">
           {features.map((feature) => (
             <Card
               key={feature.title}

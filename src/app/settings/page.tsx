@@ -9,6 +9,8 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { GoogleAuthButton } from '@/components/GoogleAuthButton';
 import PromptEditor from '@/components/PromptEditor';
+import ApiUsageBar from '@/components/ApiUsageBar';
+import ApiKeyManager from '@/components/ApiKeyManager';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AlertCircle, CheckCircle2, Info, Shield, Clock, Zap } from 'lucide-react';
@@ -49,6 +51,12 @@ function SettingsContent() {
             )}
 
             <div className="space-y-6">
+                {/* API Key Management */}
+                <ApiKeyManager />
+
+                {/* API Usage Tracker */}
+                <ApiUsageBar />
+
                 {/* AI Prompts Section */}
                 <PromptEditor />
 

@@ -7,6 +7,7 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         const { posts, ideasPrompt, hooksPrompt } = body;
+        const apiKeyOverride = request.headers.get('x-groq-api-key') || undefined;
 
         if (!posts || !Array.isArray(posts) || posts.length === 0) {
             return NextResponse.json(
@@ -48,23 +49,28 @@ export async function POST(request: NextRequest) {
         }
 
         // Generate ideas and viral hooks in parallel
-        const [rawIdeas, hooks] = await Promise.all([
-            generateContentIdeas(topic, validDiscussions, ideasPrompt || undefined),
-            generateViralHooks(validDiscussions, hooksPrompt || undefined),
+        const [ideasResult, hooksResult] = await Promise.all([
+            generateContentIdeas(topic, validDiscussions, ideasPrompt || undefined, apiKeyOverride),
+            generateViralHooks(validDiscussions, hooksPrompt || undefined, apiKeyOverride),
         ]);
 
         // Distribute hooks across ideas (2 per idea)
-        const ideas = rawIdeas.map((idea, i) => {
+        const ideas = ideasResult.ideas.map((idea, i) => {
             const startIdx = i * 2;
-            const ideaHooks = hooks.slice(startIdx, startIdx + 2);
+            const ideaHooks = hooksResult.hooks.slice(startIdx, startIdx + 2);
             return { ...idea, hooks: ideaHooks };
         });
 
-        return NextResponse.json({ ideas });
+        // Return the latest rate limit info (from whichever finished last)
+        return NextResponse.json({
+            ideas,
+            rateLimit: hooksResult.rateLimit,
+        });
     } catch (error) {
-        console.error('Error in analyze route:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('Error in analyze route:', errorMessage, error);
         return NextResponse.json(
-            { error: 'Failed to generate ideas.' },
+            { error: `Failed to generate ideas: ${errorMessage}` },
             { status: 500 }
         );
     }
