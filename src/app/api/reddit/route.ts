@@ -1,13 +1,8 @@
-/**
- * Reddit Search API Proxy Route.
- * Proxies search requests to Reddit's JSON endpoint with rate limiting and caching.
- * GET /api/reddit?keywords=...&sort=top|hot
- */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimiter } from '@/lib/rate-limiter';
-import { searchCache } from '@/lib/cache';
-import { fetchRedditPosts } from '@/lib/reddit';
+import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
+import { searchReddit } from '@/lib/reddit';
 import { SearchResponse } from '@/types';
 
 export async function GET(request: NextRequest) {
@@ -44,7 +39,9 @@ export async function GET(request: NextRequest) {
         const sortType = sort === 'hot' ? 'hot' : 'top'; // Default to 'top'
 
         // Check cache first
-        const cached = searchCache.get(keywords, sortType, time);
+        const cacheKey = makeCacheKey('reddit-search', keywords, sortType, time);
+        const cached = await cacheGet(cacheKey);
+
         if (cached) {
             return NextResponse.json(cached);
         }
@@ -71,7 +68,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Fetch from Reddit
-        const posts = await fetchRedditPosts(keywords, sortType, time);
+        const posts = await searchReddit(keywords, 25, sortType, time as any);
 
         const response: SearchResponse = {
             posts,
@@ -83,7 +80,7 @@ export async function GET(request: NextRequest) {
         };
 
         // Cache the response
-        searchCache.set(keywords, sortType, response, time);
+        await cacheSet(cacheKey, response, TTL.SEARCH_RESULTS);
 
         return NextResponse.json(response);
     } catch (error) {
