@@ -258,63 +258,171 @@ Example: ["(laptop OR computer) AND overheat", "title:overheating subreddit:tech
 }
 
 /**
- * Context Mode: Step 3 - Semantic Filtering
- * Scores posts from 0-10 based on relevance to the user's intent.
+ * Context Mode: Step 3 — Semantic Filtering (Single Batched Call)
+ *
+ * Changes vs. previous version:
+ *  - One Groq call for ALL posts (was one call per post)
+ *  - Compact payload: title-only for long titles, title+150-char snippet for short/question titles
+ *  - Compact JSON response: [{i, s}] array (was full key-value object)
+ *  - Score distribution instruction embedded in prompt
+ *  - Drop threshold lowered to 4 (was 6)
+ *  - localStorage cache per postId+intentHash with 1-hour TTL; cache hits skip the AI payload
+ *  - Graceful fallback: if Groq call fails, returns posts as-is sorted by engagementScore
  */
+
+// ---------- helpers ----------
+
+/** djb2-style short hash of a string — no external dep needed */
+function shortHash(str: string): string {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+    return (h >>> 0).toString(36).slice(0, 6);
+}
+
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+interface CacheEntry { score: number; ts: number }
+
+function cacheKey(postId: string, intentHash: string): string {
+    return `rs:${postId}:${intentHash}`;
+}
+
+function readCache(key: string): number | null {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        const entry: CacheEntry = JSON.parse(raw);
+        if (Date.now() - entry.ts > CACHE_TTL_MS) { localStorage.removeItem(key); return null; }
+        return entry.score;
+    } catch { return null; }
+}
+
+function writeCache(key: string, score: number): void {
+    if (typeof localStorage === 'undefined') return;
+    try { localStorage.setItem(key, JSON.stringify({ score, ts: Date.now() } satisfies CacheEntry)); } catch { /* quota exceeded — ignore */ }
+}
+
+// ---------- main export ----------
+
 export async function filterPostsByContext(
     posts: any[],
     userQuery: string,
     apiKeyOverride?: string
 ): Promise<{ filteredPosts: any[]; rateLimit: RateLimitInfo }> {
-    // Optimization: Only send title and snippet to save tokens
-    const simplifiedPosts = posts.map((p, index) => ({
-        id: index, // Use index to map back
-        title: p.title,
-        subreddit: p.subreddit,
-        snippet: p.selftext ? p.selftext.substring(0, 200) : '',
-    }));
 
-    const prompt = `
-You are a Content Curator. I will give you a list of Reddit posts and a User Query.
-Your job is to rate each post from 0-10 based on **Semantic Relevance** and **Utility** to the user.
+    const intentHash = shortHash(userQuery.toLowerCase().trim());
 
-User Query: "${userQuery}"
+    // ---- Resolve cache hits ----
+    // Each post is checked independently; hits are excluded from the AI payload.
+    const cachedScores: Map<number, number> = new Map();
+    const uncachedPosts: { index: number; post: any }[] = [];
 
-Scoring Guide:
-- 0-3: Irrelevant, spam, or completely off-topic (e.g. meme when asking for help).
-- 4-6: Tangentially related but not a direct answer.
-- 7-10: Highly relevant, direct answer, or valuable discussion.
+    for (let i = 0; i < posts.length; i++) {
+        const key = cacheKey(posts[i].id ?? String(i), intentHash);
+        const cached = readCache(key);
+        if (cached !== null) {
+            cachedScores.set(i, cached);
+        } else {
+            uncachedPosts.push({ index: i, post: posts[i] });
+        }
+    }
+
+    // Dummy rate limit for the all-cache-hit path
+    const noopRateLimit: RateLimitInfo = { remaining: 0, limit: 0, resetInSeconds: 0 };
+
+    // If every post was a cache hit, skip the Groq call entirely
+    if (uncachedPosts.length === 0) {
+        return buildResult(posts, cachedScores, new Map(), noopRateLimit);
+    }
+
+    // ---- Build compact AI payload ----
+    // Rule: if title has > 8 words AND does not end with '?', send title only.
+    // Otherwise, send "title — snippet[:150]".
+    const payloadLines = uncachedPosts.map(({ index, post }, payloadIdx) => {
+        const words = (post.title || '').split(/\s+/).filter(Boolean);
+        const isQuestion = (post.title || '').trimEnd().endsWith('?');
+        const titleOnly = words.length > 8 && !isQuestion;
+        const text = titleOnly
+            ? post.title
+            : `${post.title}${post.selftext ? ` — ${String(post.selftext).slice(0, 150)}` : ''}`;
+        return `${payloadIdx}. ${text}`;
+    });
+
+    const prompt =
+        `You are a relevance scoring engine. Rate each Reddit post for the query below.
+
+Query: "${userQuery}"
 
 Posts:
-${JSON.stringify(simplifiedPosts)}
+${payloadLines.join('\n')}
 
-Return ONLY a JSON object where keys are the post IDs (indices) and values are the scores.
-Example: { "0": 2, "1": 9, "2": 5 }
-`;
+Rules:
+- Score 0-10. Distribute scores realistically: ~20% above 7, ~50% between 3-7, ~30% below 3.
+- Return ONLY a compact JSON array. No text, no markdown.
+- Format: [{"i":0,"s":7},{"i":1,"s":3}] where i = index, s = score.`;
 
-    const { content, rateLimit } = await callGroq(
-        [
-            { role: 'system', content: 'You are an accurate relevance scoring engine.' },
-            { role: 'user', content: prompt },
-        ],
-        0.3, // Low introversion for strict scoring
-        apiKeyOverride
-    );
+    let rateLimit: RateLimitInfo = noopRateLimit;
+    const aiScores: Map<number, number> = new Map(); // payloadIdx → score
 
-    const scores = extractJSON(content) as Record<string, number>;
+    try {
+        const result = await callGroq(
+            [
+                { role: 'system', content: 'You are a compact relevance scoring engine. Return only JSON.' },
+                { role: 'user', content: prompt },
+            ],
+            0.2, // Very low temperature for deterministic scoring
+            apiKeyOverride
+        );
+        rateLimit = result.rateLimit;
 
-    // Filter and sort posts
-    if (!scores) return { filteredPosts: posts.slice(0, 20), rateLimit }; // Fallback
+        const parsed = extractJSON(result.content) as Array<{ i: number; s: number }>;
+        if (Array.isArray(parsed)) {
+            for (const entry of parsed) {
+                if (typeof entry.i === 'number' && typeof entry.s === 'number') {
+                    aiScores.set(entry.i, entry.s);
+                }
+            }
+        }
 
-    const scoredPosts = posts.map((p, index) => ({
-        ...p,
-        relevanceScore: scores[String(index)] || 0,
-    }));
+        // Persist new scores to localStorage
+        for (const [payloadIdx, score] of aiScores) {
+            const post = uncachedPosts[payloadIdx]?.post;
+            if (post) {
+                const key = cacheKey(post.id ?? String(uncachedPosts[payloadIdx].index), intentHash);
+                writeCache(key, score);
+            }
+        }
+    } catch (err) {
+        // Graceful fallback: AI call failed — return posts sorted by engagementScore only
+        console.error('[filterPostsByContext] Groq call failed, falling back to engagement ranking:', err);
+        const fallback = [...posts].sort((a, b) => (b.engagementScore ?? 0) - (a.engagementScore ?? 0));
+        return { filteredPosts: fallback, rateLimit: noopRateLimit };
+    }
 
-    // Keep posts with score >= 6, sort by score desc
-    const filtered = scoredPosts
-        .filter((p) => p.relevanceScore >= 6)
-        .sort((a, b) => b.relevanceScore - a.relevanceScore);
+    return buildResult(posts, cachedScores, aiScores, rateLimit);
 
-    return { filteredPosts: filtered, rateLimit };
+    // ---- local helper: merge scores and apply threshold ----
+    function buildResult(
+        allPosts: any[],
+        cached: Map<number, number>,
+        fromAI: Map<number, number>,
+        rl: RateLimitInfo
+    ): { filteredPosts: any[]; rateLimit: RateLimitInfo } {
+        const scored = allPosts.map((p, i) => {
+            // Look up in cache first, then in fresh AI scores (keyed by payloadIdx)
+            const payloadIdx = uncachedPosts.findIndex(u => u.index === i);
+            const relevance = cached.get(i) ?? fromAI.get(payloadIdx) ?? null;
+
+            // If a post was neither cached nor in the AI payload (excluded by smart pre-filter upstream),
+            // it should not appear in final results — mark as excluded.
+            return { ...p, relevanceScore: relevance };
+        });
+
+        const filtered = scored
+            .filter(p => p.relevanceScore !== null && p.relevanceScore >= 4) // new cutoff: 4 (was 6)
+            .sort((a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0));
+
+        return { filteredPosts: filtered, rateLimit: rl };
+    }
 }

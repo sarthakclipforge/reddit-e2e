@@ -1,11 +1,16 @@
 /**
  * Reddit API helper — fetches posts using Reddit's public JSON endpoints.
- * Optimized for local use with robust retry logic and header spoofing.
+ *
+ * Changes vs. previous version:
+ *  - Adaptive pagination: after page 1, stops early if yieldRate (surviving/raw) <= 0.7
+ *  - Dead-on-arrival filter: drops posts with upvotes < 5 AND comments < 3 immediately on ingest
+ *  - Default sort = 'top', default t = 'week' — pre-validates engagement on Reddit's side
+ *  - Removed custom '15d' post-filter; any valid Reddit `t` param is accepted as-is
+ *    (sub-day granularity is not supported by Reddit's API)
  */
 
 import { RedditPost } from '@/types';
 
-// Use standard Reddit domain
 const REDDIT_API_BASE = 'https://www.reddit.com';
 
 // Browser-like User-Agent to avoid immediate blocking
@@ -29,6 +34,7 @@ interface RedditApiChild {
         subreddit_name_prefixed: string;
         created_utc: number;
         author: string;
+        upvote_ratio?: number;
     };
 }
 
@@ -44,26 +50,18 @@ interface RedditApiResponse {
  */
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-        // Create a controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
         try {
-            const res = await fetch(url, {
-                ...options,
-                signal: controller.signal,
-            });
+            const res = await fetch(url, { ...options, signal: controller.signal });
             clearTimeout(timeoutId);
 
             if (res.ok) return res;
 
-            // Retry on 429 (Too Many Requests) or 5xx server errors
             if ((res.status === 429 || res.status >= 500) && attempt < maxRetries - 1) {
-                const delay = Math.pow(2, attempt) * 1500; // 1.5s, 3s, 6s...
-                console.warn(
-                    `Reddit returned ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1
-                    }/${maxRetries})`
-                );
+                const delay = Math.pow(2, attempt) * 1500;
+                console.warn(`Reddit returned ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
                 await new Promise((r) => setTimeout(r, delay));
                 continue;
             }
@@ -72,7 +70,6 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
         } catch (err: unknown) {
             clearTimeout(timeoutId);
 
-            // Retry on timeout (AbortError in fetch) or network errors
             if (err instanceof DOMException && err.name === 'AbortError') {
                 if (attempt < maxRetries - 1) {
                     console.warn(`Reddit request timed out, retrying (attempt ${attempt + 1}/${maxRetries})`);
@@ -82,10 +79,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
                 throw new Error('Reddit request timed out after multiple retries');
             }
 
-            // Rethrow if it's the last attempt or a non-retryable error
             if (attempt === maxRetries - 1) throw err;
-
-            // Wait before retry for generic network errors
             await new Promise((r) => setTimeout(r, 2000));
         }
     }
@@ -93,48 +87,54 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
 }
 
 /**
+ * Dead-on-arrival guard: discard posts with negligible traction immediately on ingest,
+ * before they ever enter the working set or the AI pipeline.
+ */
+function isAlive(child: RedditApiChild): boolean {
+    return !(child.data.score < 5 && child.data.num_comments < 3);
+}
+
+/**
  * Fetch Reddit posts for a given query and sort type.
- * Paginates to collect up to 100 posts total.
+ *
+ * Defaults: sort = 'top', time = 'week' — this pre-validates engagement on Reddit's side.
+ * Any valid Reddit `t` param is accepted (hour, day, week, month, year, all).
+ * Sub-day granularity (e.g. '15d') is not supported by the Reddit API.
+ *
+ * Adaptive pagination: fetches page 1 unconditionally. For subsequent pages,
+ * checks yieldRate = (survivors so far / raw posts fetched so far). If yieldRate <= 0.7,
+ * the query is not yielding enough quality posts and further pagination is stopped.
+ * Hard cap: 4 pages.
  */
 export async function fetchRedditPosts(
     keywords: string,
-    sort: 'top' | 'hot',
-    time?: string
+    sort: 'top' | 'hot' = 'top',  // Default changed from caller-required to 'top'
+    time: string = 'week'          // Default changed to 'week' for engagement pre-validation
 ): Promise<RedditPost[]> {
     const allPosts: RedditPost[] = [];
     let after: string | null = null;
+    let totalRawFetched = 0; // Count of all raw posts seen (including DOA)
 
-    // Map time parameter ('15d' is handled by fetching 'month' and filtering)
-    let tParam = time || 'all';
-    if (time === '15d') {
-        tParam = 'month';
-    }
-
-    const maxPages = 4; // Fetch up to 4 pages (approx 100 results)
+    const maxPages = 4;
 
     for (let page = 0; page < maxPages; page++) {
         const params = new URLSearchParams({
             q: keywords,
-            limit: '100', // Request max items per page
+            limit: '100',
             sort,
-            t: tParam,
+            t: time,
             type: 'link',
             raw_json: '1',
         });
 
-        if (after) {
-            params.set('after', after);
-        }
+        if (after) params.set('after', after);
 
         const url = `${REDDIT_API_BASE}/search.json?${params.toString()}`;
 
         try {
             const res = await fetchWithRetry(url, {
                 method: 'GET',
-                headers: {
-                    'User-Agent': USER_AGENT,
-                    'Accept': 'application/json',
-                },
+                headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
                 cache: 'no-store',
             });
 
@@ -143,14 +143,11 @@ export async function fetchRedditPosts(
 
             if (children.length === 0) break;
 
-            for (const child of children) {
-                const postTime = child.data.created_utc * 1000;
+            totalRawFetched += children.length;
 
-                // Manual filtering for custom '15d' time range
-                if (time === '15d') {
-                    const fifteenDaysAgo = Date.now() - 15 * 24 * 60 * 60 * 1000;
-                    if (postTime < fifteenDaysAgo) continue;
-                }
+            // Ingest with dead-on-arrival filter applied immediately
+            for (const child of children) {
+                if (!isAlive(child)) continue; // Drop low-signal posts before accumulating
 
                 allPosts.push({
                     id: child.data.id,
@@ -159,28 +156,37 @@ export async function fetchRedditPosts(
                     comments: child.data.num_comments,
                     link: `https://www.reddit.com${child.data.permalink}`,
                     subreddit: child.data.subreddit_name_prefixed,
-                    created: new Date(postTime).toISOString(),
+                    created: new Date(child.data.created_utc * 1000).toISOString(),
                     author: child.data.author,
+                    // Store upvote_ratio for engagement scoring in useContextSearch
+                    upvoteRatio: child.data.upvote_ratio ?? 0.8,
                 });
             }
 
             after = json?.data?.after;
 
-            // Stop if no more pages or we have enough posts
+            // Adaptive early stop: after page 1, check yieldRate
+            if (page > 0 && totalRawFetched > 0) {
+                const yieldRate = allPosts.length / totalRawFetched;
+                if (yieldRate <= 0.7) {
+                    // Low signal density — further pages won't improve quality
+                    console.info(`[reddit] Stopped at page ${page + 1}: yieldRate=${yieldRate.toFixed(2)} <= 0.7`);
+                    break;
+                }
+            }
+
             if (!after || allPosts.length >= 100) break;
 
-            // Important: Delay between paginated requests to respect rate limits
+            // Delay between paginated requests to respect rate limits
             if (page < maxPages - 1 && after) {
                 await new Promise((r) => setTimeout(r, 1500));
             }
         } catch (error) {
             console.error('Error fetching Reddit page:', error);
-            // If one page fails, we can still return what we have so far
-            break;
+            break; // Return what we have so far
         }
     }
 
-    // Sort again to be sure (since we might have multiple pages)
     return allPosts.sort((a, b) => b.upvotes - a.upvotes).slice(0, 100);
 }
 
@@ -189,7 +195,6 @@ export async function fetchRedditPosts(
  */
 export async function getPostDetails(permalink: string): Promise<string> {
     try {
-        // Ensure clean permalink
         const cleanPermalink = permalink.endsWith('/') ? permalink.slice(0, -1) : permalink;
         const url = `${REDDIT_API_BASE}${cleanPermalink}.json?raw_json=1`;
 
@@ -197,21 +202,15 @@ export async function getPostDetails(permalink: string): Promise<string> {
             url,
             {
                 method: 'GET',
-                headers: {
-                    'User-Agent': USER_AGENT,
-                    'Accept': 'application/json',
-                },
+                headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
                 cache: 'no-store',
             },
-            2 // Fewer retries for comments
+            2
         );
 
         const data = await res.json();
 
-        // Reddit post JSON structure is an array: [postData, commentsData]
-        if (!data || !Array.isArray(data) || data.length < 2) {
-            return '';
-        }
+        if (!data || !Array.isArray(data) || data.length < 2) return '';
 
         const commentsData = data[1]?.data?.children;
         if (!commentsData) return '';
@@ -220,12 +219,10 @@ export async function getPostDetails(permalink: string): Promise<string> {
         for (const child of commentsData) {
             if (child.kind === 't1' && child.data) {
                 const body = child.data.body;
-                // Filter deleted/removed comments
                 if (body && body !== '[deleted]' && body !== '[removed]') {
                     comments.push(body);
                 }
             }
-            // Limit to top 10 comments
             if (comments.length >= 10) break;
         }
 
@@ -239,11 +236,12 @@ export async function getPostDetails(permalink: string): Promise<string> {
 /**
  * Browser-side search using a CORS proxy to bypass IP blocks.
  * Usage: Client-side only ("Context Mode").
+ * Same adaptive defaults as fetchRedditPosts: sort='top', time='week'.
  */
 export async function searchRedditBrowser(
     query: string,
     sort: 'top' | 'hot' = 'top',
-    time: string = 'all'
+    time: string = 'week'
 ): Promise<RedditPost[]> {
     const params = new URLSearchParams({
         q: query,
@@ -254,8 +252,6 @@ export async function searchRedditBrowser(
         raw_json: '1',
     });
 
-    // Use CORS Proxy to bypass Reddit's strict CORS policy on client-side
-    // We target the standard JSON API
     const targetUrl = `${REDDIT_API_BASE}/search.json?${params.toString()}`;
     const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
@@ -271,16 +267,19 @@ export async function searchRedditBrowser(
         const json = await res.json() as RedditApiResponse;
         const children = json?.data?.children || [];
 
-        return children.map(child => ({
-            id: child.data.id,
-            title: child.data.title,
-            upvotes: child.data.score,
-            comments: child.data.num_comments,
-            link: `https://www.reddit.com${child.data.permalink}`,
-            subreddit: child.data.subreddit_name_prefixed,
-            created: new Date(child.data.created_utc * 1000).toISOString(),
-            author: child.data.author,
-        }));
+        return children
+            .filter(isAlive) // Apply the same dead-on-arrival filter client-side
+            .map(child => ({
+                id: child.data.id,
+                title: child.data.title,
+                upvotes: child.data.score,
+                comments: child.data.num_comments,
+                link: `https://www.reddit.com${child.data.permalink}`,
+                subreddit: child.data.subreddit_name_prefixed,
+                created: new Date(child.data.created_utc * 1000).toISOString(),
+                author: child.data.author,
+                upvoteRatio: child.data.upvote_ratio ?? 0.8,
+            }));
     } catch (error) {
         console.error('Browser search failed:', error);
         return [];

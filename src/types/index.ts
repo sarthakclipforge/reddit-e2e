@@ -9,6 +9,7 @@ export interface RedditPost {
     subreddit: string;
     created: string; // ISO date string
     author: string;
+    upvoteRatio?: number;   // 0-1, used for engagement scoring
     relevanceScore?: number;
 }
 
