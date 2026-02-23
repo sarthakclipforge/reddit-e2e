@@ -41,6 +41,7 @@ export default function SearchPage() {
     const isError = isContextMode ? !!contextSearch.error : standardSearch.isError;
     const error = isContextMode ? contextSearch.error : standardSearch.error;
     const data = isContextMode ? contextSearch.data : standardSearch.data;
+    const refetch = isContextMode ? contextSearch.refetch : standardSearch.refetch;
 
     const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot', time?: string, contextMode: boolean = false) => {
         setSearchKeywords(keywords);
