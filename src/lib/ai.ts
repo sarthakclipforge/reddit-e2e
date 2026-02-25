@@ -318,9 +318,13 @@ export async function generateContentIdeas(
     const promptTemplate = promptOverride || DEFAULT_IDEAS_PROMPT;
     const discussionsText = discussions.join('\n\n---\n\n');
 
-    const prompt = promptTemplate
+    let prompt = promptTemplate
         .replace('{{SUBREDDIT}}', topic)
         .replace('{{DISCUSSIONS}}', discussionsText);
+
+    if (promptOverride && !prompt.includes('"hook"')) {
+        prompt += `\n\nIMPORTANT: Format the output as a JSON array of objects with the following keys:\n- "hook": A strong opening line.\n- "concept": The core idea.\n- "why": Why this works.\n- "cta": A suggested Call to Action.\n\nDo not include any explanation, just the JSON array.`;
+    }
 
     const { content, rateLimit } = await callGroq(
         [
@@ -383,9 +387,14 @@ export async function generateVideoScripts(
 ): Promise<{ scripts: VideoScripts; rateLimit: RateLimitInfo }> {
     const promptTemplate = promptOverride || DEFAULT_SCRIPTS_PROMPT;
 
-    const prompt = promptTemplate
+    let prompt = promptTemplate
         .replace('{{HOOK}}', hook)
         .replace('{{CONCEPT}}', concept);
+
+    // If the user provided a custom prompt but stripped out the JSON schema, forcefully append it
+    if (promptOverride && !prompt.includes('"variation1"')) {
+        prompt += `\n\nIMPORTANT: Return the output as a JSON object with two keys:\n- "variation1": The full script text for Variation 1. Use \\n for line breaks.\n- "variation2": The full script text for Variation 2. Use \\n for line breaks.\n\nNo explanations. No extra commentary. Just the JSON object.`;
+    }
 
     const { content, rateLimit } = await callGroq(
         [

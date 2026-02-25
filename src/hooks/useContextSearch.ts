@@ -30,7 +30,7 @@ export function useContextSearch() {
 
     const { updateUsage } = useApiUsage();
 
-    const search = useCallback(async (query: string) => {
+    const search = useCallback(async (query: string, strictness?: number) => {
         setState(prev => ({
             ...prev,
             isLoading: true,
@@ -46,7 +46,7 @@ export function useContextSearch() {
             const res = await fetch('/api/context/filter', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...headers },
-                body: JSON.stringify({ query }),
+                body: JSON.stringify({ query, strictness }),
             });
 
             // Simulate progress states for better UI feel (since server does it all at once)

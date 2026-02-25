@@ -8,7 +8,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Search, Loader2, Flame, TrendingUp, Calendar } from 'lucide-react';
+import { Search, Loader2, Flame, TrendingUp, Calendar, SlidersHorizontal } from 'lucide-react';
 import {
     Select,
     SelectContent,
@@ -19,7 +19,7 @@ import {
 
 
 interface SearchFormProps {
-    onSearch: (keywords: string, sort: 'top' | 'hot', time?: string, isContextMode?: boolean) => void;
+    onSearch: (keywords: string, sort: 'top' | 'hot', time?: string, isContextMode?: boolean, strictness?: number) => void;
     isLoading: boolean;
     initialKeywords?: string;
     initialSort?: 'top' | 'hot';
@@ -31,6 +31,7 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
     const [sort, setSort] = useState<'top' | 'hot'>(initialSort);
     const [time, setTime] = useState(initialTime);
     const [isContextMode, setIsContextMode] = useState(false);
+    const [strictness, setStrictness] = useState(0.75);
     const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
     // Clean up debounce timer on unmount
@@ -48,7 +49,7 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
 
             // Immediate submit for Context Mode (no debounce needed as it's explicit)
             if (isContextMode) {
-                onSearch(keywords.trim(), sort, time, true);
+                onSearch(keywords.trim(), sort, time, true, strictness);
                 return;
             }
 
@@ -64,10 +65,10 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
             if (e.key === 'Enter') {
                 e.preventDefault();
                 if (!keywords.trim() || isLoading) return;
-                onSearch(keywords.trim(), sort, time, isContextMode);
+                onSearch(keywords.trim(), sort, time, isContextMode, isContextMode ? strictness : undefined);
             }
         },
-        [keywords, sort, time, isContextMode, isLoading, onSearch]
+        [keywords, sort, time, isContextMode, strictness, isLoading, onSearch]
     );
 
     return (
@@ -78,8 +79,8 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
                     type="button"
                     onClick={() => setIsContextMode(!isContextMode)}
                     className={`text-xs flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${isContextMode
-                            ? 'bg-purple-500/10 text-purple-600 border-purple-200 dark:border-purple-800'
-                            : 'bg-muted/50 text-muted-foreground border-transparent hover:bg-muted'
+                        ? 'bg-purple-500/10 text-purple-600 border-purple-200 dark:border-purple-800'
+                        : 'bg-muted/50 text-muted-foreground border-transparent hover:bg-muted'
                         }`}
                 >
                     <div className={`w-2 h-2 rounded-full ${isContextMode ? 'bg-purple-500 animate-pulse' : 'bg-muted-foreground/30'}`} />
@@ -97,14 +98,37 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
                     onChange={(e) => setKeywords(e.target.value)}
                     onKeyDown={handleKeyDown}
                     className={`pl-10 h-12 text-base bg-background transition-colors ${isContextMode
-                            ? 'border-purple-500/30 ring-purple-500/10 focus:border-purple-500/50'
-                            : 'border-border/60 focus:border-primary/50'
+                        ? 'border-purple-500/30 ring-purple-500/10 focus:border-purple-500/50'
+                        : 'border-border/60 focus:border-primary/50'
                         }`}
                     aria-label="Search keywords"
                     maxLength={200}
                     disabled={isLoading}
                 />
             </div>
+
+            {/* Strictness Slider — only in Context Mode */}
+            {isContextMode && (
+                <div className="flex items-center gap-3 px-1">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+                        <SlidersHorizontal className="h-3.5 w-3.5 text-purple-500" />
+                        <span className="font-medium">Strictness</span>
+                    </div>
+                    <input
+                        type="range"
+                        min="0.50"
+                        max="0.95"
+                        step="0.05"
+                        value={strictness}
+                        onChange={(e) => setStrictness(parseFloat(e.target.value))}
+                        className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer accent-purple-500 bg-purple-500/20"
+                        aria-label="Semantic filter strictness"
+                    />
+                    <span className="text-xs font-mono text-purple-500 w-[70px] text-right shrink-0">
+                        {strictness <= 0.55 ? 'Lenient' : strictness <= 0.70 ? 'Normal' : strictness <= 0.85 ? 'Strict' : 'Very Strict'}
+                    </span>
+                </div>
+            )}
 
             {/* Sort + Search Row */}
             <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
@@ -158,8 +182,8 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
                     type="submit"
                     disabled={!keywords.trim() || isLoading}
                     className={`h-10 px-6 sm:ml-auto text-white border-0 shadow-md hover:shadow-lg transition-all ${isContextMode
-                            ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700'
-                            : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600'
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700'
+                        : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600'
                         }`}
                 >
                     {isLoading ? (

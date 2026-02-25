@@ -7,7 +7,7 @@ import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
 
 export async function POST(req: NextRequest) {
     try {
-        const { query: userQuery } = await req.json();
+        const { query: userQuery, strictness } = await req.json();
         const apiKey = req.headers.get('x-groq-api-key') || undefined;
 
         // 1. Validation
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 2. Cache Check (Full Response)
-        const cacheKey = makeCacheKey('filter', userQuery);
+        const cacheKey = makeCacheKey('filter', `${userQuery}__s${strictness ?? 'default'}`);
         const cached = await cacheGet(cacheKey);
         if (cached) {
             return NextResponse.json({ ...cached, cached: true });
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 6. Semantic Filtering (local embeddings — 0 tokens)
-        const semanticallyFiltered = await semanticFilter(uniquePosts, userQuery, 'unknown');
+        const semanticallyFiltered = await semanticFilter(uniquePosts, userQuery, 'unknown', strictness);
 
         // 7. Final Ranking — heuristic score only (AI re-scoring removed to save ~2,100 tokens/search)
         // If semantic filter produced nothing (very niche query), fall back to heuristic-sorted raw posts.

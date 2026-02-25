@@ -43,7 +43,7 @@ export default function SearchPage() {
     const error = isContextMode ? contextSearch.error : standardSearch.error;
     const data = isContextMode ? contextSearch.data : standardSearch.data;
 
-    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot', time?: string, contextMode: boolean = false) => {
+    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot', time?: string, contextMode: boolean = false, strictness?: number) => {
         setSearchKeywords(keywords);
         setSearchSort(sort);
         if (time) setSearchTime(time);
@@ -54,7 +54,7 @@ export default function SearchPage() {
 
         // If context mode, trigger it explicitly
         if (contextMode) {
-            contextSearch.search(keywords);
+            contextSearch.search(keywords, strictness);
         }
     }, [contextSearch]);
 
