@@ -20,22 +20,38 @@ export interface RateLimitInfo {
  */
 function safeParseJSON<T>(content: string, fallback: T): T {
     try {
-        // Strip markdown fences
-        let cleaned = content.replace(/```(?:json)?|```/g, '');
+        // First try standard parsing
+        return JSON.parse(content) as T;
+    } catch {
+        try {
+            // Strip markdown fences
+            let cleaned = content.replace(/```(?:json)?\n?/gi, '').replace(/```/g, '');
 
-        // Find first '{' or '['
-        const firstOpen = cleaned.search(/[{[]/);
-        // Find last '}' or ']'
-        const lastClose = cleaned.search(/[}\]][^}\]]*$/);
+            // Fallback strategy: Find the FIRST '{' or '[' AND the LAST '}' or ']'
+            const firstOpenObj = cleaned.indexOf('{');
+            const firstOpenArr = cleaned.indexOf('[');
 
-        if (firstOpen !== -1 && lastClose !== -1) {
-            cleaned = cleaned.substring(firstOpen, lastClose + 1);
+            // Determine which comes first (ignoring -1)
+            let firstOpen = -1;
+            if (firstOpenObj !== -1 && firstOpenArr !== -1) {
+                firstOpen = Math.min(firstOpenObj, firstOpenArr);
+            } else {
+                firstOpen = Math.max(firstOpenObj, firstOpenArr);
+            }
+
+            const lastCloseObj = cleaned.lastIndexOf('}');
+            const lastCloseArr = cleaned.lastIndexOf(']');
+            const lastClose = Math.max(lastCloseObj, lastCloseArr);
+
+            if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+                const extracted = cleaned.substring(firstOpen, lastClose + 1);
+                return JSON.parse(extracted) as T;
+            }
+            throw new Error('No valid JSON bounds found');
+        } catch (error) {
+            console.warn('Failed to parse AI JSON response. Raw content:', content);
+            return fallback;
         }
-
-        return JSON.parse(cleaned) as T;
-    } catch (error) {
-        console.warn('Failed to parse AI JSON response. Raw content:', content);
-        return fallback;
     }
 }
 
@@ -72,6 +88,8 @@ async function callGroq(
     messages: { role: string; content: string }[],
     temperature: number = 0.7,
     apiKeyOverride?: string,
+    model: string = 'llama-3.3-70b-versatile',
+    responseFormat?: { type: 'json_object' },
 ): Promise<{ content: string; rateLimit: RateLimitInfo }> {
     const apiKey = apiKeyOverride || process.env.GROQ_API_KEY;
     if (!apiKey) throw new Error('Missing GROQ_API_KEY');
@@ -89,10 +107,10 @@ async function callGroq(
                 'Authorization': `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
+                model,
                 messages,
                 temperature,
-                response_format: { type: 'json_object' } // Enforce JSON mode
+                ...(responseFormat ? { response_format: responseFormat } : {}),
             }),
         });
 
@@ -141,7 +159,9 @@ Output JSON format:
             { role: 'user', content: prompt },
         ],
         0.5,
-        apiKeyOverride
+        apiKeyOverride,
+        'llama-3.1-8b-instant',       // Cheap model — query gen is a simple task
+        { type: 'json_object' },       // Enforce JSON object — prompt returns {queries:[...]}
     );
 
     const parsed = safeParseJSON(content, { queries: [userQuery] });
@@ -149,6 +169,71 @@ Output JSON format:
     const queries = Array.isArray(parsed?.queries) ? parsed.queries : [userQuery];
 
     return { queries: queries.slice(0, 3), rateLimit };
+}
+
+/**
+ * Generates a 1-sentence reason for why each post was selected for the given query.
+ * Batch processes up to 25 posts in one prompt to save time/tokens.
+ */
+export async function generatePostReasons(
+    userQuery: string,
+    posts: any[],
+    apiKeyOverride?: string
+): Promise<{ reasons: Record<string, string>; rateLimit: RateLimitInfo }> {
+    if (posts.length === 0) return { reasons: {}, rateLimit: { remaining: 100, limit: 100, resetInSeconds: 0 } };
+
+    // Create a compact representation of the posts for the prompt
+    // Optimization: Cut snippet to 120 chars (enough for context), don't send empty fields
+    const postData = posts.map(p => ({
+        i: p.id,
+        t: p.title,
+        ...(p.snippet ? { s: p.snippet.substring(0, 120) } : {})
+    }));
+
+    const prompt = `
+Context: "${sanitizePostContent(userQuery)}"
+Task: Write 1 short sentence why each post matches the context. Be direct.
+CRITICAL RULES:
+1. Do NOT guess or hallucinate relationships. If a post shares a name (e.g. same last name) but does not clearly refer to the exact person or concept, return an empty string "".
+2. If a post does NOT directly and obviously match the context with concrete evidence, you MUST return an empty string "". 
+3. Never write "This post does not relate". Return "" instead.
+
+Posts:
+${JSON.stringify(postData)}
+
+Output JSON:
+{
+  "r": [
+    ["post_id", "Short reason."]
+  ]
+}
+`;
+
+    const { content, rateLimit } = await callGroq(
+        [
+            { role: 'system', content: 'You are a helpful assistant. Output valid JSON only.' },
+            { role: 'user', content: prompt }
+        ],
+        0.5,
+        apiKeyOverride,
+        'llama-3.1-8b-instant', // Fast/cheap model is fine for this
+        { type: 'json_object' }
+    );
+
+    const parsed = safeParseJSON(content, { r: [] });
+
+    // Map the compressed array format back to a Record<string, string>
+    const reasonsMap: Record<string, string> = {};
+    const items = (parsed as any).r || [];
+    if (Array.isArray(items)) {
+        for (const item of items) {
+            if (Array.isArray(item) && item.length === 2) {
+                reasonsMap[item[0]] = item[1];
+            }
+        }
+    }
+
+    return { reasons: reasonsMap, rateLimit };
 }
 
 export async function filterPostsByContext(
@@ -278,8 +363,14 @@ export async function generateViralHooks(
         apiKeyOverride
     );
 
-    const parsed = safeParseJSON<{ hooks: string[] }>(content, { hooks: [] });
-    const hooks = Array.isArray(parsed?.hooks) ? parsed.hooks : [];
+    // The model may return a plain array ["hook1",..] or {hooks:["hook1",..]}
+    const parsed = safeParseJSON<string[] | { hooks: string[] }>(content, []);
+    let hooks: string[] = [];
+    if (Array.isArray(parsed)) {
+        hooks = parsed;
+    } else if (parsed && Array.isArray((parsed as { hooks: string[] }).hooks)) {
+        hooks = (parsed as { hooks: string[] }).hooks;
+    }
 
     return { hooks, rateLimit };
 }

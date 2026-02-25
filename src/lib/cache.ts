@@ -82,10 +82,41 @@ export async function cacheSet(key: string, value: any, ttlSeconds: number): Pro
     });
 }
 
-export function makeCacheKey(namespace: string, ...parts: string[]): string {
-    return [namespace, ...parts]
-        .join(':')
+
+// Common English stop words to strip from query cache keys
+const STOP_WORDS = new Set([
+    'a', 'an', 'the', 'and', 'or', 'but', 'for', 'of', 'to', 'in',
+    'is', 'it', 'on', 'at', 'by', 'as', 'with', 'how', 'what', 'why',
+    'when', 'who', 'which', 'that', 'this', 'are', 'was', 'be', 'do',
+    'tips', 'help', 'best', 'good', 'ways', 'get',
+]);
+
+/**
+ * Normalises a query string for use as a cache key.
+ * - Lowercases
+ * - Strips punctuation & stop words
+ * - Sorts remaining tokens so word-order doesn't matter
+ * - Produces a stable, compact key
+ *
+ * "tips for content marketing" → "content:marketing"
+ * "content marketing tips"     → "content:marketing"  (same key → cache hit!)
+ */
+function normaliseQuery(query: string): string {
+    return query
         .toLowerCase()
-        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9\s]/g, '')          // strip punctuation
+        .split(/\s+/)
+        .filter(w => w.length > 1 && !STOP_WORDS.has(w))
+        .sort()                                // order-independent
+        .join(':')
+        .slice(0, 120);
+}
+
+export function makeCacheKey(namespace: string, ...parts: string[]): string {
+    const normalisedParts = parts.map(p => normaliseQuery(p));
+    return [namespace, ...normalisedParts]
+        .filter(Boolean)
+        .join(':')
         .slice(0, 200);
 }
+

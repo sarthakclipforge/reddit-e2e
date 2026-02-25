@@ -1,6 +1,5 @@
-
 import { NextRequest, NextResponse } from 'next/server';
-import { generateSearchQueries, filterPostsByContext } from '@/lib/ai';
+import { generateSearchQueries, generatePostReasons } from '@/lib/ai';
 import { searchReddit } from '@/lib/reddit';
 import { deduplicateWithBonus, heuristicScore } from '@/lib/heuristics';
 import { semanticFilter } from '@/lib/embeddings';
@@ -23,17 +22,15 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ ...cached, cached: true });
         }
 
-        // 3. Intent Analysis
-        // Note: In a full pipeline, we might cache this separately, but here we run it part of the flow
+        // 3. Intent Analysis — uses llama-3.1-8b-instant (cheap, fast)
         const { queries } = await generateSearchQueries(userQuery, apiKey);
 
-        // 4. Distributed Search (Server-Side)
-        // Execute all 3 queries in parallel
-        const results = await Promise.allSettled([
-            searchReddit(queries[0], 25, 'relevance'), // Broad
-            searchReddit(queries[1], 25, 'relevance'), // Specific
-            searchReddit(queries[2], 25, 'relevance')  // Strategic
-        ]);
+        // 4. Distributed Search (Server-Side) — only call for valid query strings
+        // Guard: if AI returned fewer than 3 queries, don't pass undefined to searchReddit
+        const validQueries = queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
+        const results = await Promise.allSettled(
+            validQueries.map(q => searchReddit(q, 25, 'relevance'))
+        );
 
         const allResults = results.map(r => r.status === 'fulfilled' ? r.value : []);
 
@@ -44,40 +41,39 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ posts: [], filterStats: { input: 0, output: 0 } });
         }
 
-        // 6. Semantic Filtering (Embeddings)
-        // Determine intent type loosely from queries or pass it down. 
-        // For now, defaulting to 'unknown' or inferring from the query structure could be complex.
-        // We'll trust the adaptiveThreshold default.
+        // 6. Semantic Filtering (local embeddings — 0 tokens)
         const semanticallyFiltered = await semanticFilter(uniquePosts, userQuery, 'unknown');
 
-        // If nothing passes semantic filter, return stat
-        if (semanticallyFiltered.length === 0) {
-            return NextResponse.json({
-                posts: [],
-                queryContext: queries,
-                filterStats: {
-                    input: uniquePosts.length,
-                    semanticPass: 0,
-                    output: 0
-                }
-            });
-        }
+        // 7. Final Ranking — heuristic score only (AI re-scoring removed to save ~2,100 tokens/search)
+        // If semantic filter produced nothing (very niche query), fall back to heuristic-sorted raw posts.
+        const postsToRank = semanticallyFiltered.length > 0 ? semanticallyFiltered : uniquePosts;
 
-        // 7. Pre-Ranking (Heuristic)
-        // Sort by naive heuristic score to send best candidates to AI
-        const preRanked = semanticallyFiltered
+        let finalResults = postsToRank
             .map((p: any) => ({ ...p, hScore: heuristicScore(p) }))
             .sort((a: any, b: any) => b.hScore - a.hScore)
-            .slice(0, 30); // Cap at 30 for AI analysis
+            .slice(0, 25)
+            .map((p: any) => ({
+                ...p,
+                relevanceScore: Math.min(10, Math.max(1, Math.round((p.semanticScore || 0) * 10)))
+            }));
 
-        // 7. AI Semantic Filtering
-        const { filteredPosts } = await filterPostsByContext(preRanked, userQuery, apiKey);
+        // 8. Generate Reasons for the final top posts
+        // Only generate reasons if the posts actually have direct context (passed semantic filter).
+        // If it fell back to raw posts, skip generating reasons (saves tokens, hides "Why:" UI).
+        try {
+            if (semanticallyFiltered.length > 0) {
+                const { reasons } = await generatePostReasons(userQuery, finalResults, apiKey);
+                finalResults = finalResults.map(p => ({
+                    ...p,
+                    reason: reasons[p.id] || ''
+                })).filter(p => p.reason.trim() !== ''); // STRICT FILTER: Drop posts the AI rejected
 
-        // 8. Final Scoring & Sort
-        // Combine AI Score (65%) and Relevance/Heuristic (35%) - Simplified for now to just use AI score threshold
-        const finalResults = filteredPosts
-            .filter(p => p.relevanceScore >= 6) // Threshold
-            .sort((a, b) => b.relevanceScore - a.relevanceScore);
+                // If the strict filter dropped everything, we return empty so the user doesn't get junk.
+            }
+        } catch (e) {
+            console.warn('Failed to generate post reasons:', e);
+            // Non-fatal, just continue without reasons
+        }
 
         const response = {
             posts: finalResults,
@@ -85,7 +81,6 @@ export async function POST(req: NextRequest) {
             filterStats: {
                 input: uniquePosts.length,
                 semanticPass: semanticallyFiltered.length,
-                analyzed: preRanked.length,
                 output: finalResults.length
             }
         };

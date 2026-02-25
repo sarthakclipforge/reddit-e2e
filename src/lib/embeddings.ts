@@ -66,7 +66,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeout = 500
 
 async function getEmbeddingsWithRetry(texts: string[], attempt = 1): Promise<number[][]> {
     const apiKey = process.env.HF_API_KEY;
-    if (!apiKey) throw new Error('Missing HF_API_KEY');
+    if (!apiKey) throw new Error('Missing HF_API_KEY — add it to .env.local');
 
     try {
         const response = await fetchWithTimeout(HF_API_URL, {
@@ -130,12 +130,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
  * Returns adaptive threshold based on intent type.
  */
 export function adaptiveThreshold(intent: string): number {
-    switch (intent.toLowerCase()) {
-        case 'how-to': return 0.74;
-        case 'story': return 0.68;
-        case 'trend': return 0.70;
-        default: return 0.72; // problem or unknown
-    }
+    return 0.65;
 }
 
 /**
@@ -154,7 +149,7 @@ export async function semanticFilter(
         // For posts, combine title + snippet for better context
         const textsToEmbed = [
             query,
-            ...posts.map(p => `${p.title} ${p.selftext?.slice(0, 200) || ''}`)
+            ...posts.map(p => `${p.title} ${p.snippet?.slice(0, 200) || ''}`)
         ];
 
         const embeddings = await getEmbeddings(textsToEmbed);
@@ -172,11 +167,9 @@ export async function semanticFilter(
         });
 
     } catch (error) {
-        console.error('Semantic filter failed:', error);
-        // Fail open? Or fail closed? 
-        // Instructions imply this is a filter, so maybe return empty or return all if it fails?
-        // Let's return all but mark them as unverified to be safe, or just rethrow.
-        // Given this is "Context Search", returning all might spam. Let's return empty to be safe.
-        return [];
+        console.error('Semantic filter failed — returning all posts unfiltered:', error);
+        // Fail open: if the embedding API errors, return all posts so the user
+        // still gets results rather than a silent empty state.
+        return posts;
     }
 }

@@ -1,6 +1,7 @@
 /**
  * Sortable results table for displaying Reddit posts.
- * Supports client-side sorting on all columns, including AI relevance score.
+ * Supports client-side sorting on all columns.
+ * Each row has a checkbox so the user can pick posts for Generate Ideas.
  */
 
 'use client';
@@ -16,6 +17,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Checkbox } from '@/components/ui/checkbox';
 import { RedditPost, SortField, SortConfig } from '@/types';
 import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink, MessageSquare, ThumbsUp, Sparkles } from 'lucide-react';
 
@@ -26,6 +28,7 @@ interface ResultsTableProps {
     cached?: boolean;
     cacheAge?: number;
     query?: string;
+    onSelectionChange?: (selectedPosts: RedditPost[]) => void;
 }
 
 function formatDate(dateString: string): string {
@@ -60,6 +63,8 @@ function SortIcon({ field, sortConfig }: { field: SortField; sortConfig: SortCon
     );
 }
 
+const MAX_SELECTION = 5;
+
 export function ResultsTable({
     posts,
     isLoading,
@@ -67,23 +72,41 @@ export function ResultsTable({
     cached,
     cacheAge,
     query,
+    onSelectionChange,
 }: ResultsTableProps) {
     const [sortConfig, setSortConfig] = useState<SortConfig>({
         field: 'upvotes',
         direction: 'desc',
     });
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
     const hasRelevance = useMemo(() => posts.some(p => p.relevanceScore !== undefined), [posts]);
+
+    // Stable fingerprint of the current post list — avoids re-firing effects
+    // every render just because the parent passed a new array reference.
+    const postsFingerprint = useMemo(
+        () => posts.map(p => p.id).join(','),
+        [posts]
+    );
 
     // Auto-switch to relevance sorting when context mode results arrive
     useEffect(() => {
         if (hasRelevance) {
             setSortConfig({ field: 'relevance', direction: 'desc' });
         } else {
-            // Reset to upvotes for standard search if we switched back
             setSortConfig({ field: 'upvotes', direction: 'desc' });
         }
-    }, [hasRelevance, posts]); // Added posts dependency to trigger on new search results
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [postsFingerprint]);
+
+    // Clear selection whenever the result set truly changes (new search).
+    // Do NOT call onSelectionChange here — that would trigger a parent
+    // re-render → new array ref → this effect fires again → infinite loop.
+    // The parent resets selectedPosts explicitly in handleSearch instead.
+    useEffect(() => {
+        setSelectedIds(new Set());
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [postsFingerprint]);
 
     const handleSort = (field: SortField) => {
         setSortConfig((prev) => ({
@@ -115,6 +138,42 @@ export function ResultsTable({
         });
         return sorted;
     }, [posts, sortConfig]);
+
+    // Toggle one row
+    const togglePost = (post: RedditPost) => {
+        const next = new Set(selectedIds);
+        if (next.has(post.id)) {
+            next.delete(post.id);
+        } else {
+            if (next.size >= MAX_SELECTION) return; // hard cap
+            next.add(post.id);
+        }
+
+        // Update local state
+        setSelectedIds(next);
+
+        // Notify parent OUTSIDE of the set state updater function 
+        // to prevent React warnings about updating other components during render
+        const selected = posts.filter(p => next.has(p.id));
+        onSelectionChange?.(selected);
+    };
+
+    // Select / deselect all (capped at MAX_SELECTION)
+    const toggleAll = () => {
+        if (selectedIds.size > 0) {
+            setSelectedIds(new Set());
+            onSelectionChange?.([]);
+        } else {
+            const toSelect = sortedPosts.slice(0, MAX_SELECTION);
+            const next = new Set(toSelect.map(p => p.id));
+            setSelectedIds(next);
+            onSelectionChange?.(toSelect);
+        }
+    };
+
+    const allVisibleSelected =
+        sortedPosts.length > 0 &&
+        sortedPosts.slice(0, MAX_SELECTION).every(p => selectedIds.has(p.id));
 
     // Matches relevance score to a color
     const getScoreColor = (score: number) => {
@@ -171,11 +230,18 @@ export function ResultsTable({
                         )}
                     </h2>
                 </div>
-                {cached && cacheAge !== undefined && (
-                    <Badge variant="secondary" className="text-xs w-fit">
-                        📋 Cached result • {cacheAge < 60 ? `${cacheAge}s` : `${Math.floor(cacheAge / 60)}m`} ago
-                    </Badge>
-                )}
+                <div className="flex items-center gap-3">
+                    {selectedIds.size > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                            {selectedIds.size}/{MAX_SELECTION} selected for Ideas
+                        </span>
+                    )}
+                    {cached && cacheAge !== undefined && (
+                        <Badge variant="secondary" className="text-xs w-fit">
+                            📋 Cached result • {cacheAge < 60 ? `${cacheAge}s` : `${Math.floor(cacheAge / 60)}m`} ago
+                        </Badge>
+                    )}
+                </div>
             </div>
 
             {/* Table */}
@@ -184,6 +250,15 @@ export function ResultsTable({
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-muted/40 hover:bg-muted/40">
+                                {/* Select-all checkbox */}
+                                <TableHead className="w-10 text-center">
+                                    <Checkbox
+                                        checked={allVisibleSelected}
+                                        onCheckedChange={toggleAll}
+                                        aria-label="Select top posts"
+                                        className="mx-auto"
+                                    />
+                                </TableHead>
                                 {hasRelevance && (
                                     <TableHead
                                         className="cursor-pointer select-none hover:text-foreground transition-colors w-[100px]"
@@ -245,64 +320,86 @@ export function ResultsTable({
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {sortedPosts.map((post, index) => (
-                                <TableRow
-                                    key={post.id}
-                                    className={`group transition-colors ${index % 2 === 0 ? '' : 'bg-muted/10'}`}
-                                >
-                                    {hasRelevance && (
+                            {sortedPosts.map((post, index) => {
+                                const isSelected = selectedIds.has(post.id);
+                                const isDisabled = !isSelected && selectedIds.size >= MAX_SELECTION;
+                                return (
+                                    <TableRow
+                                        key={post.id}
+                                        className={`group transition-colors ${isSelected
+                                            ? 'bg-violet-50/60 dark:bg-violet-950/20'
+                                            : index % 2 === 0 ? '' : 'bg-muted/10'
+                                            }`}
+                                    >
+                                        <TableCell className="text-center">
+                                            <Checkbox
+                                                checked={isSelected}
+                                                disabled={isDisabled}
+                                                onCheckedChange={() => togglePost(post)}
+                                                aria-label={`Select post: ${post.title}`}
+                                                className="mx-auto"
+                                            />
+                                        </TableCell>
+                                        {hasRelevance && (
+                                            <TableCell>
+                                                <div className={`inline-flex items-center justify-center w-8 h-8 rounded-full border text-xs font-bold ${getScoreColor(post.relevanceScore || 0)}`}>
+                                                    {post.relevanceScore}
+                                                </div>
+                                            </TableCell>
+                                        )}
+                                        <TableCell className="max-w-[400px]">
+                                            <a
+                                                href={post.link}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-sm font-medium text-foreground hover:text-primary transition-colors line-clamp-2"
+                                                title={post.title}
+                                            >
+                                                {post.title}
+                                            </a>
+                                            {post.reason && post.reason.trim() !== '' && !post.reason.toLowerCase().includes('does not') && !post.reason.toLowerCase().includes('not direct') && !post.reason.toLowerCase().includes('not relat') && (
+                                                <p className="text-xs text-muted-foreground mt-1.5 line-clamp-2 leading-relaxed bg-muted/30 p-1.5 rounded-md border border-border/40">
+                                                    <span className="font-semibold text-purple-600/80 dark:text-purple-400/80 mr-1">Why:</span>
+                                                    {post.reason}
+                                                </p>
+                                            )}
+                                        </TableCell>
                                         <TableCell>
-                                            <div className={`inline-flex items-center justify-center w-8 h-8 rounded-full border text-xs font-bold ${getScoreColor(post.relevanceScore || 0)}`}>
-                                                {post.relevanceScore}
+                                            <Badge variant="outline" className="text-xs font-normal whitespace-nowrap">
+                                                {post.subreddit}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <div className="flex items-center justify-end gap-1 text-sm">
+                                                <ThumbsUp className="h-3.5 w-3.5 text-orange-500" />
+                                                <span className="font-medium">{formatNumber(post.upvotes)}</span>
                                             </div>
                                         </TableCell>
-                                    )}
-                                    <TableCell className="max-w-[400px]">
-                                        <a
-                                            href={post.link}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-sm font-medium text-foreground hover:text-primary transition-colors line-clamp-2"
-                                            title={post.title}
-                                        >
-                                            {post.title}
-                                        </a>
-                                    </TableCell>
-                                    <TableCell>
-                                        <Badge variant="outline" className="text-xs font-normal whitespace-nowrap">
-                                            {post.subreddit}
-                                        </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex items-center justify-end gap-1 text-sm">
-                                            <ThumbsUp className="h-3.5 w-3.5 text-orange-500" />
-                                            <span className="font-medium">{formatNumber(post.upvotes)}</span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex items-center justify-end gap-1 text-sm">
-                                            <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
-                                            <span>{formatNumber(post.comments)}</span>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell>
-                                        <span className="text-sm text-muted-foreground whitespace-nowrap">
-                                            {formatDate(post.created)}
-                                        </span>
-                                    </TableCell>
-                                    <TableCell>
-                                        <a
-                                            href={post.link}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
-                                            aria-label={`Open post: ${post.title}`}
-                                        >
-                                            <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                                        </a>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
+                                        <TableCell className="text-right">
+                                            <div className="flex items-center justify-end gap-1 text-sm">
+                                                <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
+                                                <span>{formatNumber(post.comments)}</span>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-sm text-muted-foreground whitespace-nowrap">
+                                                {formatDate(post.created)}
+                                            </span>
+                                        </TableCell>
+                                        <TableCell>
+                                            <a
+                                                href={post.link}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
+                                                aria-label={`Open post: ${post.title}`}
+                                            >
+                                                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                                            </a>
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })}
                         </TableBody>
                     </Table>
                 </div>

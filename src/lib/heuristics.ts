@@ -50,16 +50,31 @@ export function deduplicateWithBonus(queryResults: any[][]): any[] {
  * Uses defensive fallbacks to prevent NaN.
  */
 export function heuristicScore(post: any): number {
-    const upvotes = post.ups || 0;
-    const comments = post.num_comments || 0;
-    const ratio = post.upvote_ratio || 0.5;
-    const created = post.created_utc || 0;
+    const upvotes = post.upvotes || post.ups || 0;          // support both mapped and raw
+    const comments = post.comments || post.num_comments || 0;
+    // `created` is an ISO string in RedditPost; fall back to raw UTC number
+    const createdMs = post.created
+        ? new Date(post.created).getTime()
+        : (post.created_utc || 0) * 1000;
 
     // Simple recency decay
-    const hoursAgo = (Date.now() / 1000 - created) / 3600;
+    const hoursAgo = (Date.now() - createdMs) / (1000 * 3600);
     const recencyPenalty = Math.max(1, Math.log10(hoursAgo + 1));
 
-    let score = (upvotes * ratio + comments * 2) / recencyPenalty;
+    // Base engagement score
+    const engagementScore = (upvotes * 0.8 + comments * 2) / recencyPenalty;
+
+    // Semantic relevance multiplier (1.0 = perfect match, 0.65 = threshold cut-off)
+    // If semanticScore is available, it exponentially boosts the engagement score
+    // so highly relevant posts rank above marginally relevant but popular posts.
+    const semanticScore = post.semanticScore || 0;
+
+    let score = engagementScore;
+    if (semanticScore > 0) {
+        // Boost factor: a 0.85 match gets a ~20x boost compared to a baseline 0.65 match
+        const relevanceMultiplier = Math.pow(10, (semanticScore - 0.65) * 6);
+        score = engagementScore * relevanceMultiplier;
+    }
 
     // Guard against Infinity/NaN
     if (!Number.isFinite(score)) score = 0;

@@ -16,7 +16,7 @@ import { AlertCircle, SearchX, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import GenerateIdeasButton from '@/components/GenerateIdeasButton';
 import IdeasList from '@/components/IdeasList';
-import { ContentIdea } from '@/types';
+import { ContentIdea, RedditPost } from '@/types';
 
 export default function SearchPage() {
     const [searchKeywords, setSearchKeywords] = useState('');
@@ -25,6 +25,7 @@ export default function SearchPage() {
     const [hasSearched, setHasSearched] = useState(false);
     const [isContextMode, setIsContextMode] = useState(false);
     const [generatedIdeas, setGeneratedIdeas] = useState<ContentIdea[]>([]);
+    const [selectedPosts, setSelectedPosts] = useState<RedditPost[]>([]);
 
     // Standard Search Hook
     const standardSearch = useRedditSearch(
@@ -49,6 +50,7 @@ export default function SearchPage() {
         setHasSearched(true);
         setIsContextMode(contextMode);
         setGeneratedIdeas([]);
+        setSelectedPosts([]);
 
         // If context mode, trigger it explicitly
         if (contextMode) {
@@ -137,7 +139,8 @@ export default function SearchPage() {
                             disabled={isLoading}
                         />
                         <GenerateIdeasButton
-                            posts={data.posts}
+                            posts={selectedPosts.length > 0 ? selectedPosts : (data?.posts || []).slice(0, 3)}
+                            selectedCount={selectedPosts.length}
                             onIdeasGenerated={setGeneratedIdeas}
                         />
                     </div>
@@ -190,6 +193,7 @@ export default function SearchPage() {
                 cached={data?.cached}
                 cacheAge={data?.cacheAge}
                 query={data?.query}
+                onSelectionChange={setSelectedPosts}
             />
 
             {/* Empty state — before any search */}

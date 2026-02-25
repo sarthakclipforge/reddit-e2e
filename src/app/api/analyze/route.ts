@@ -16,25 +16,29 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Limit to top 10 posts to avoid hitting rate limits and consuming too many tokens
-        const topPosts = posts.slice(0, 10);
+        // Limit to top 5 posts to stay well within the 12k TPM rate limit
+        const topPosts = posts.slice(0, 5);
         const topic = topPosts[0].subreddit;
 
         console.log(`Analyzing ${topPosts.length} posts for topic: ${topic}`);
 
+        // Character cap per post discussion block (~800 chars keeps tokens low)
+        const MAX_CHARS_PER_POST = 800;
+
         // Fetch comments for these posts in parallel
         const postsData = await Promise.all(
             topPosts.map(async (post: RedditPost) => {
-                const permalink = post.link.replace('https://www.reddit.com', '');
-                const comments = await getPostDetails(permalink);
+                // Use the stored Reddit permalink directly — link may be an external URL
+                const comments = await getPostDetails(post.permalink);
 
-                return `
-                Title: ${post.title}
-                Subreddit: ${post.subreddit}
-                Upvotes: ${post.upvotes}
-                Comments:
-                ${comments}
-                `;
+                // If no comments fetched, fall back to the post's own snippet (body text)
+                const commentText = comments || post.snippet || '';
+
+                const block = `Title: ${post.title}\nSubreddit: ${post.subreddit}\nUpvotes: ${post.upvotes}\nComments:\n${commentText}`;
+                // Truncate to cap token usage per post
+                return block.length > MAX_CHARS_PER_POST
+                    ? block.substring(0, MAX_CHARS_PER_POST) + '…'
+                    : block;
             })
         );
 
@@ -48,11 +52,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Generate ideas and viral hooks in parallel
-        const [ideasResult, hooksResult] = await Promise.all([
-            generateContentIdeas(topic, validDiscussions, ideasPrompt || undefined, apiKeyOverride),
-            generateViralHooks(validDiscussions, hooksPrompt || undefined, apiKeyOverride),
-        ]);
+        // Run sequentially (not parallel) to avoid burning through the per-minute token limit
+        const ideasResult = await generateContentIdeas(topic, validDiscussions, ideasPrompt || undefined, apiKeyOverride);
+        const hooksResult = await generateViralHooks(validDiscussions, hooksPrompt || undefined, apiKeyOverride);
 
         // Distribute hooks across ideas (2 per idea)
         const ideas = ideasResult.ideas.map((idea, i) => {

@@ -6,10 +6,13 @@ export interface RedditPost {
     upvotes: number;
     comments: number;
     link: string;
+    permalink: string; // Reddit thread path e.g. /r/sub/comments/id/title/
+    snippet: string;   // Post body text (selftext)
     subreddit: string;
     created: string; // ISO date string
     author: string;
     relevanceScore?: number;
+    reason?: string; // 1-2 line reason why this post was selected (Context Mode)
 }
 
 export interface SearchParams {

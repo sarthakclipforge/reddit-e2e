@@ -70,7 +70,8 @@ export async function searchReddit(
                 subreddit: p.subreddit || 'u/unknown',
                 author: p.author || 'deleted',
                 link: p.url || `https://reddit.com${p.permalink}`,
-                selftext: (p.selftext || '').substring(0, 1000),
+                permalink: p.permalink || '',          // Reddit thread path for comment fetching
+                snippet: (p.selftext || '').substring(0, 500), // Post body text
                 upvotes: p.ups || 0,
                 comments: p.num_comments || 0,
                 created: new Date((p.created_utc || Date.now() / 1000) * 1000).toISOString(),
@@ -125,10 +126,14 @@ export async function getPostDetails(permalink: string): Promise<string> {
         const comments = commentsListing?.data?.children || [];
 
         return comments
-            .map((c: any) => c.data.body)
+            .map((c: any) => {
+                const body: string = c.data.body || '';
+                // Truncate each comment to 200 chars to keep token usage low
+                return body.length > 200 ? body.substring(0, 200) + '…' : body;
+            })
             .filter((body: string) => body && body !== '[deleted]' && body !== '[removed]')
             .slice(0, 5) // Top 5 comments
-            .join('\\n---\\n');
+            .join('\n---\n');
 
     } catch (error) {
         console.error('Error fetching post details:', error);
