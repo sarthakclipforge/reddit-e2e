@@ -23,9 +23,9 @@ export function ExportButtons({ posts, keywords, disabled }: ExportButtonsProps)
     const { isAuthenticated } = useGoogleAuth();
     const [isExportingSheets, setIsExportingSheets] = useState(false);
 
-    const handleXLSXDownload = () => {
+    const handleXLSXDownload = async () => {
         try {
-            exportToXLSX(posts, keywords);
+            await exportToXLSX(posts, keywords);
             toast.success('Excel file downloaded!', {
                 description: `Exported ${posts.length} posts to XLSX`,
             });

@@ -8,7 +8,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Sparkles, Check, Lightbulb, Target, Megaphone, Flame, Clapperboard, X } from "lucide-react";
+import { Copy, Sparkles, Check, Lightbulb, Target, Megaphone, Flame, Clapperboard } from "lucide-react";
 import { PROMPT_KEYS, getPrompt, DEFAULT_SCRIPTS_PROMPT } from "@/lib/promptStore";
 import { useApiUsage } from "@/context/ApiUsageContext";
 import { getStoredApiKey } from "@/components/ApiKeyManager";

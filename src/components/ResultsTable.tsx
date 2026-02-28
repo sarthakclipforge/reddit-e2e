@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import {
     Table,
     TableBody,
@@ -74,16 +74,15 @@ export function ResultsTable({
     });
 
     const hasRelevance = useMemo(() => posts.some(p => p.relevanceScore !== undefined), [posts]);
-
-    // Auto-switch to relevance sorting when context mode results arrive
-    useEffect(() => {
-        if (hasRelevance) {
-            setSortConfig({ field: 'relevance', direction: 'desc' });
-        } else {
-            // Reset to upvotes for standard search if we switched back
-            setSortConfig({ field: 'upvotes', direction: 'desc' });
+    const activeSortConfig = useMemo<SortConfig>(() => {
+        if (hasRelevance && sortConfig.field === 'upvotes' && sortConfig.direction === 'desc') {
+            return { field: 'relevance', direction: 'desc' };
         }
-    }, [hasRelevance, posts]); // Added posts dependency to trigger on new search results
+        if (!hasRelevance && sortConfig.field === 'relevance') {
+            return { field: 'upvotes', direction: 'desc' };
+        }
+        return sortConfig;
+    }, [hasRelevance, sortConfig]);
 
     const handleSort = (field: SortField) => {
         setSortConfig((prev) => ({
@@ -95,8 +94,8 @@ export function ResultsTable({
     const sortedPosts = useMemo(() => {
         const sorted = [...posts];
         sorted.sort((a, b) => {
-            const dir = sortConfig.direction === 'asc' ? 1 : -1;
-            switch (sortConfig.field) {
+            const dir = activeSortConfig.direction === 'asc' ? 1 : -1;
+            switch (activeSortConfig.field) {
                 case 'relevance':
                     return ((a.relevanceScore || 0) - (b.relevanceScore || 0)) * dir;
                 case 'upvotes':
@@ -114,7 +113,7 @@ export function ResultsTable({
             }
         });
         return sorted;
-    }, [posts, sortConfig]);
+    }, [posts, activeSortConfig]);
 
     // Matches relevance score to a color
     const getScoreColor = (score: number) => {
@@ -192,7 +191,7 @@ export function ResultsTable({
                                         <div className="flex items-center">
                                             <Sparkles className="h-3.5 w-3.5 mr-1 text-purple-500" />
                                             Score
-                                            <SortIcon field="relevance" sortConfig={sortConfig} />
+                                            <SortIcon field="relevance" sortConfig={activeSortConfig} />
                                         </div>
                                     </TableHead>
                                 )}
@@ -202,7 +201,7 @@ export function ResultsTable({
                                 >
                                     <div className="flex items-center">
                                         Title
-                                        <SortIcon field="title" sortConfig={sortConfig} />
+                                        <SortIcon field="title" sortConfig={activeSortConfig} />
                                     </div>
                                 </TableHead>
                                 <TableHead
@@ -211,7 +210,7 @@ export function ResultsTable({
                                 >
                                     <div className="flex items-center">
                                         Subreddit
-                                        <SortIcon field="subreddit" sortConfig={sortConfig} />
+                                        <SortIcon field="subreddit" sortConfig={activeSortConfig} />
                                     </div>
                                 </TableHead>
                                 <TableHead
@@ -220,7 +219,7 @@ export function ResultsTable({
                                 >
                                     <div className="flex items-center justify-end">
                                         Upvotes
-                                        <SortIcon field="upvotes" sortConfig={sortConfig} />
+                                        <SortIcon field="upvotes" sortConfig={activeSortConfig} />
                                     </div>
                                 </TableHead>
                                 <TableHead
@@ -229,7 +228,7 @@ export function ResultsTable({
                                 >
                                     <div className="flex items-center justify-end">
                                         Comments
-                                        <SortIcon field="comments" sortConfig={sortConfig} />
+                                        <SortIcon field="comments" sortConfig={activeSortConfig} />
                                     </div>
                                 </TableHead>
                                 <TableHead
@@ -238,7 +237,7 @@ export function ResultsTable({
                                 >
                                     <div className="flex items-center">
                                         Posted
-                                        <SortIcon field="created" sortConfig={sortConfig} />
+                                        <SortIcon field="created" sortConfig={activeSortConfig} />
                                     </div>
                                 </TableHead>
                                 <TableHead className="w-10">Link</TableHead>

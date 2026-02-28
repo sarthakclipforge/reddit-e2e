@@ -20,7 +20,7 @@ import { ContentIdea } from '@/types';
 
 export default function SearchPage() {
     const [searchKeywords, setSearchKeywords] = useState('');
-    const [searchSort, setSearchSort] = useState<'top' | 'hot'>('top');
+    const [searchSort, setSearchSort] = useState<'top' | 'hot' | 'relevance'>('top');
     const [searchTime, setSearchTime] = useState('all');
     const [hasSearched, setHasSearched] = useState(false);
     const [isContextMode, setIsContextMode] = useState(false);
@@ -41,8 +41,15 @@ export default function SearchPage() {
     const isError = isContextMode ? !!contextSearch.error : standardSearch.isError;
     const error = isContextMode ? contextSearch.error : standardSearch.error;
     const data = isContextMode ? contextSearch.data : standardSearch.data;
+    const refetch = useCallback(() => {
+        if (isContextMode) {
+            contextSearch.search(searchKeywords, searchSort, searchTime);
+            return;
+        }
+        void standardSearch.refetch();
+    }, [contextSearch, isContextMode, searchKeywords, searchSort, searchTime, standardSearch]);
 
-    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot', time?: string, contextMode: boolean = false) => {
+    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot' | 'relevance', time?: string, contextMode: boolean = false) => {
         setSearchKeywords(keywords);
         setSearchSort(sort);
         if (time) setSearchTime(time);

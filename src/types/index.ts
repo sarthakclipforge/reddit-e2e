@@ -10,12 +10,19 @@ export interface RedditPost {
     created: string; // ISO date string
     author: string;
     relevanceScore?: number;
+    selftext?: string;
+    thumbnail?: string | null;
+    upvote_ratio?: number;
+    created_utc?: number;
+    frequencyBonus?: number;
+    semanticScore?: number;
+    hScore?: number;
 }
 
 export interface SearchParams {
     keywords: string;
-    sort: 'top' | 'hot';
-    time?: string;
+    sort: 'top' | 'hot' | 'relevance';
+    time?: TimeRange;
 }
 
 export interface SearchResponse {
@@ -51,6 +58,25 @@ export type SortDirection = 'asc' | 'desc';
 export interface SortConfig {
     field: SortField;
     direction: SortDirection;
+}
+
+export type TimeRange = 'hour' | 'day' | 'week' | '15d' | 'month' | 'year' | 'all';
+
+export interface FilterStats {
+    input: number;
+    semanticPass?: number;
+    analyzed?: number;
+    output: number;
+}
+
+export interface ContextSearchResponse {
+    posts: RedditPost[];
+    queryContext?: string[];
+    filterStats?: FilterStats;
+    cached?: boolean;
+    totalResults?: number;
+    query?: string;
+    cacheAge?: number;
 }
 
 export interface ContentIdea {

@@ -4,6 +4,40 @@ import { RedditPost } from '@/types';
 const REDDIT_SEARCH_URL = 'https://www.reddit.com/search.json';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+type RedditListingChild = {
+    data?: {
+        name?: string;
+        id?: string;
+        title?: string;
+        subreddit?: string;
+        author?: string;
+        url?: string;
+        permalink?: string;
+        selftext?: string;
+        ups?: number;
+        num_comments?: number;
+        upvote_ratio?: number;
+        created_utc?: number;
+        thumbnail?: string;
+    };
+};
+
+type RedditSearchResponse = {
+    data?: {
+        children?: RedditListingChild[];
+    };
+};
+
+type RedditCommentsResponse = Array<{
+    data?: {
+        children?: Array<{
+            data?: {
+                body?: string;
+            };
+        }>;
+    };
+}>;
+
 /**
  * Wraps fetch with a timeout to prevent hanging requests.
  */
@@ -29,13 +63,14 @@ export async function searchReddit(
     query: string,
     limit: number = 25,
     sort: 'relevance' | 'hot' | 'top' | 'new' = 'relevance',
-    time: 'all' | 'year' | 'month' | 'week' | 'day' | 'hour' = 'all'
+    time: 'all' | 'year' | 'month' | 'week' | 'day' | 'hour' | '15d' = 'all'
 ): Promise<RedditPost[]> {
+    const timeParam = time === '15d' ? 'month' : time;
     const params = new URLSearchParams({
         q: query,
         limit: limit.toString(),
         sort: sort,
-        t: time,
+        t: timeParam,
         type: 'link', // Only posts, no subreddits/users
         include_over_18: 'off'
     });
@@ -57,23 +92,25 @@ export async function searchReddit(
             throw new Error(`Reddit API Error: ${res.status}`);
         }
 
-        const data = await res.json();
+        const data = (await res.json()) as RedditSearchResponse;
 
         // Defensive Mapping
         const children = data?.data?.children || [];
 
-        return children.map((child: any) => {
+        return children.map((child) => {
             const p = child?.data || {};
             return {
-                id: p.name || `t3_${Math.random().toString(36).substr(2, 9)}`,
+                id: p.name || `t3_${Math.random().toString(36).slice(2, 11)}`,
                 title: p.title || 'Untitled Post',
                 subreddit: p.subreddit || 'u/unknown',
                 author: p.author || 'deleted',
-                link: p.url || `https://reddit.com${p.permalink}`,
+                link: p.url || `https://reddit.com${p.permalink || ''}`,
                 selftext: (p.selftext || '').substring(0, 1000),
                 upvotes: p.ups || 0,
                 comments: p.num_comments || 0,
                 created: new Date((p.created_utc || Date.now() / 1000) * 1000).toISOString(),
+                upvote_ratio: p.upvote_ratio || 0,
+                created_utc: p.created_utc || 0,
                 thumbnail: p.thumbnail && p.thumbnail.startsWith('http') ? p.thumbnail : null
             } as RedditPost;
         });
@@ -114,7 +151,7 @@ export async function getPostDetails(permalink: string): Promise<string> {
             return '';
         }
 
-        const data = await res.json();
+        const data = (await res.json()) as RedditCommentsResponse;
 
         if (!Array.isArray(data) || data.length < 2) {
             return '';
@@ -125,7 +162,7 @@ export async function getPostDetails(permalink: string): Promise<string> {
         const comments = commentsListing?.data?.children || [];
 
         return comments
-            .map((c: any) => c.data.body)
+            .map((comment) => comment.data?.body || '')
             .filter((body: string) => body && body !== '[deleted]' && body !== '[removed]')
             .slice(0, 5) // Top 5 comments
             .join('\\n---\\n');

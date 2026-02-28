@@ -5,7 +5,8 @@ import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
 
 export async function POST(req: NextRequest) {
     try {
-        const { query } = await req.json();
+        const body = (await req.json()) as { query?: string };
+        const query = body.query;
 
         // 1. Validate Input
         let cleanQuery = (query || '').trim().slice(0, 200);
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
 
         // 2. Check Cache
         const cacheKey = makeCacheKey('intent', cleanQuery);
-        const cached = await cacheGet(cacheKey);
+        const cached = await cacheGet<{ queries: string[] }>(cacheKey);
         if (cached) {
             return NextResponse.json(cached);
         }
@@ -31,10 +32,10 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json(result);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Intent API Error:', error);
 
-        const msg = error.message || '';
+        const msg = error instanceof Error ? error.message : String(error);
         if (msg.includes('timed out')) {
             return NextResponse.json(
                 { error: 'Intent analysis timed out. Please try again.' },

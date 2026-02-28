@@ -1,41 +1,37 @@
 
 import { useState, useCallback } from 'react';
-import { RedditPost } from '@/types';
-import { useApiUsage } from '@/context/ApiUsageContext';
+import { ContextSearchResponse } from '@/types';
 import { getStoredApiKey } from '@/components/ApiKeyManager';
+
+type ContextSearchStatus = 'idle' | 'analyzing' | 'fetching' | 'filtering' | 'done' | 'error';
 
 interface ContextSearchState {
     isLoading: boolean;
-    data: {
-        posts: RedditPost[];
-        queryContext?: string[];
-        filterStats?: any;
-        cached?: boolean;
-    } | null;
+    status: ContextSearchStatus;
+    data: ContextSearchResponse | null;
     error: string | null;
 }
 
 export function useContextSearch() {
     const [state, setState] = useState<ContextSearchState>({
         isLoading: false,
+        status: 'idle',
         data: null,
         error: null,
     });
 
-    const { updateUsage } = useApiUsage();
-
-    const search = useCallback(async (query: string) => {
-        setState(prev => ({ ...prev, isLoading: true, error: null }));
+    const search = useCallback(async (query: string, sort?: 'top' | 'hot' | 'relevance', time?: string) => {
+        setState((prev) => ({ ...prev, isLoading: true, status: 'analyzing', error: null }));
 
         try {
             const apiKey = getStoredApiKey();
             const headers: Record<string, string> = apiKey ? { 'x-groq-api-key': apiKey } : {};
+            setState((prev) => ({ ...prev, status: 'fetching' }));
 
-            // Single call to the orchestration route
             const res = await fetch('/api/context/filter', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...headers },
-                body: JSON.stringify({ query }),
+                body: JSON.stringify({ query, sort, time }),
             });
 
             if (res.status === 429) {
@@ -53,29 +49,29 @@ export function useContextSearch() {
                 throw new Error(`${msg}${details}`);
             }
 
-            const data = await res.json();
-
-            // Optional: Update usage if returned (not implemented in this simplified route yet)
-            // if (data.rateLimit) updateUsage(...)
+            const data = (await res.json()) as ContextSearchResponse;
+            setState((prev) => ({ ...prev, status: 'filtering' }));
 
             setState({
                 isLoading: false,
-                data: data,
+                status: 'done',
+                data,
                 error: null
             });
 
-        } catch (err: any) {
-            console.error('Context search error:', err);
+        } catch (error: unknown) {
+            console.error('Context search error:', error);
             setState({
                 isLoading: false,
+                status: 'error',
                 data: null,
-                error: err.message || 'Unknown error occurred'
+                error: error instanceof Error ? error.message : 'Unknown error occurred'
             });
         }
-    }, [updateUsage]);
+    }, []);
 
     const reset = useCallback(() => {
-        setState({ isLoading: false, data: null, error: null });
+        setState({ isLoading: false, status: 'idle', data: null, error: null });
     }, []);
 
     return { ...state, search, reset };

@@ -4,7 +4,12 @@
  * Uses Upstash Redis if configured, otherwise falls back to a simple in-memory Map.
  */
 
-const memoryCache = new Map<string, { value: any; expiresAt: number }>();
+type CacheEntry = {
+    value: unknown;
+    expiresAt: number;
+};
+
+const memoryCache = new Map<string, CacheEntry>();
 
 export const TTL = {
     SEARCH_RESULTS: 1800, // 30 mins
@@ -22,7 +27,7 @@ setInterval(() => {
     }
 }, 60000 * 5); // Run every 5 mins
 
-async function redisGet(key: string): Promise<any | null> {
+async function redisGet(key: string): Promise<unknown | null> {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
@@ -32,18 +37,18 @@ async function redisGet(key: string): Promise<any | null> {
         const res = await fetch(`${url}/get/${key}`, {
             headers: { Authorization: `Bearer ${token}` }
         });
-        const data = await res.json();
+        const data = (await res.json()) as { result?: string };
         if (data.result) {
             return JSON.parse(data.result);
         }
         return null;
-    } catch (e) {
-        console.warn('Redis Get Failed:', e);
+    } catch (error) {
+        console.warn('Redis Get Failed:', error);
         return null;
     }
 }
 
-async function redisSet(key: string, value: any, ttlSeconds: number): Promise<void> {
+async function redisSet(key: string, value: unknown, ttlSeconds: number): Promise<void> {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
@@ -53,25 +58,25 @@ async function redisSet(key: string, value: any, ttlSeconds: number): Promise<vo
         await fetch(`${url}/setex/${key}/${ttlSeconds}/${JSON.stringify(value)}`, {
             headers: { Authorization: `Bearer ${token}` }
         });
-    } catch (e) {
-        console.warn('Redis Set Failed:', e);
+    } catch (error) {
+        console.warn('Redis Set Failed:', error);
     }
 }
 
-export async function cacheGet(key: string): Promise<any | null> {
+export async function cacheGet<T>(key: string): Promise<T | null> {
     // Try Redis first
     const redisVal = await redisGet(key);
-    if (redisVal) return redisVal;
+    if (redisVal !== null) return redisVal as T;
 
     // Fallback to Memory
     const entry = memoryCache.get(key);
     if (entry && entry.expiresAt > Date.now()) {
-        return entry.value;
+        return entry.value as T;
     }
     return null;
 }
 
-export async function cacheSet(key: string, value: any, ttlSeconds: number): Promise<void> {
+export async function cacheSet<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
     // Write to Redis (Fire & Forget)
     redisSet(key, value, ttlSeconds).catch(() => { });
 

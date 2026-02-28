@@ -3,14 +3,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { rateLimiter } from '@/lib/rate-limiter';
 import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
 import { searchReddit } from '@/lib/reddit';
-import { SearchResponse } from '@/types';
+import { SearchResponse, TimeRange } from '@/types';
+
+type RedditSort = 'top' | 'hot' | 'relevance';
 
 export async function GET(request: NextRequest) {
     try {
         // Parse query params
         const { searchParams } = new URL(request.url);
         const keywords = searchParams.get('keywords')?.trim();
-        const sort = searchParams.get('sort') as 'top' | 'hot' | null;
+        const sort = searchParams.get('sort') as RedditSort | null;
         const time = searchParams.get('time') || 'all';
 
         // Validate inputs
@@ -28,19 +30,23 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        const validTimeRanges = ['hour', 'day', 'week', 'month', 'year', 'all', '15d'];
-        if (!validTimeRanges.includes(time)) {
+        const validTimeRanges: TimeRange[] = ['hour', 'day', 'week', '15d', 'month', 'year', 'all'];
+        const isTimeRange = (value: string): value is TimeRange =>
+            validTimeRanges.includes(value as TimeRange);
+
+        if (!isTimeRange(time)) {
             return NextResponse.json(
                 { error: 'Invalid time parameter' },
                 { status: 400 }
             );
         }
+        const timeRange: TimeRange = time;
 
-        const sortType = sort === 'hot' ? 'hot' : 'top'; // Default to 'top'
+        const sortType: RedditSort = sort === 'hot' || sort === 'relevance' ? sort : 'top';
 
         // Check cache first
         const cacheKey = makeCacheKey('reddit-search', keywords, sortType, time);
-        const cached = await cacheGet(cacheKey);
+        const cached = await cacheGet<SearchResponse>(cacheKey);
 
         if (cached) {
             return NextResponse.json(cached);
@@ -68,7 +74,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Fetch from Reddit
-        const posts = await searchReddit(keywords, 25, sortType, time as any);
+        const posts = await searchReddit(keywords, 25, sortType, timeRange);
 
         const response: SearchResponse = {
             posts,

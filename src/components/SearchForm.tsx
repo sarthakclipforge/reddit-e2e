@@ -8,7 +8,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Search, Loader2, Flame, TrendingUp, Calendar } from 'lucide-react';
+import { Search, Loader2, Flame, TrendingUp, Calendar, Sparkles } from 'lucide-react';
 import {
     Select,
     SelectContent,
@@ -19,16 +19,16 @@ import {
 
 
 interface SearchFormProps {
-    onSearch: (keywords: string, sort: 'top' | 'hot', time?: string, isContextMode?: boolean) => void;
+    onSearch: (keywords: string, sort: 'top' | 'hot' | 'relevance', time?: string, isContextMode?: boolean) => void;
     isLoading: boolean;
     initialKeywords?: string;
-    initialSort?: 'top' | 'hot';
+    initialSort?: 'top' | 'hot' | 'relevance';
     initialTime?: string;
 }
 
 export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialSort = 'top', initialTime = 'all' }: SearchFormProps) {
     const [keywords, setKeywords] = useState(initialKeywords);
-    const [sort, setSort] = useState<'top' | 'hot'>(initialSort);
+    const [sort, setSort] = useState<'top' | 'hot' | 'relevance'>(initialSort);
     const [time, setTime] = useState(initialTime);
     const [isContextMode, setIsContextMode] = useState(false);
     const debounceTimer = useRef<NodeJS.Timeout | null>(null);
@@ -133,6 +133,18 @@ export function SearchForm({ onSearch, isLoading, initialKeywords = '', initialS
                     >
                         <Flame className="h-4 w-4" />
                         Hot
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setSort('relevance')}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all ${sort === 'relevance'
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        aria-label="Sort by Relevance"
+                    >
+                        <Sparkles className="h-4 w-4" />
+                        Relevance
                     </button>
                 </div>
 

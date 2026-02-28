@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Key, Eye, EyeOff, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
@@ -9,14 +9,12 @@ const STORAGE_KEY = "groq-api-key";
 
 export default function ApiKeyManager() {
     const [apiKey, setApiKey] = useState("");
-    const [savedKey, setSavedKey] = useState<string | null>(null);
+    const [savedKey, setSavedKey] = useState<string | null>(() => {
+        if (typeof window === "undefined") return null;
+        return localStorage.getItem(STORAGE_KEY);
+    });
     const [showKey, setShowKey] = useState(false);
     const [justSaved, setJustSaved] = useState(false);
-
-    useEffect(() => {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) setSavedKey(stored);
-    }, []);
 
     const handleSave = () => {
         if (!apiKey.trim()) return;

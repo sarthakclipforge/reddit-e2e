@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -49,18 +49,15 @@ const PROMPT_SECTIONS: PromptSection[] = [
 ];
 
 export default function PromptEditor() {
-    const [prompts, setPrompts] = useState<Record<string, string>>({});
-    const [saved, setSaved] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState<string | null>(null);
-
-    // Load from localStorage on mount
-    useEffect(() => {
+    const [prompts, setPrompts] = useState<Record<string, string>>(() => {
         const loaded: Record<string, string> = {};
         for (const section of PROMPT_SECTIONS) {
             loaded[section.key] = getPrompt(section.key, section.defaultValue);
         }
-        setPrompts(loaded);
-    }, []);
+        return loaded;
+    });
+    const [saved, setSaved] = useState<string | null>(null);
+    const [expanded, setExpanded] = useState<string | null>(null);
 
     const handleSave = (key: string) => {
         setPrompt(key, prompts[key]);

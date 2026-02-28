@@ -64,6 +64,10 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeout = 500
     }
 }
 
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 async function getEmbeddingsWithRetry(texts: string[], attempt = 1): Promise<number[][]> {
     const apiKey = process.env.HF_API_KEY;
     if (!apiKey) throw new Error('Missing HF_API_KEY');
@@ -96,15 +100,26 @@ async function getEmbeddingsWithRetry(texts: string[], attempt = 1): Promise<num
             throw new Error(`HF Error ${response.status}: ${err}`);
         }
 
-        return await response.json();
+        const payload = (await response.json()) as unknown;
+        if (!Array.isArray(payload)) {
+            throw new Error('Invalid embeddings response format');
+        }
 
-    } catch (error: any) {
+        return payload.map((vector) => {
+            if (!Array.isArray(vector)) {
+                throw new Error('Invalid embedding vector');
+            }
+            return vector.map((value) => Number(value));
+        });
+
+    } catch (error: unknown) {
         if (attempt >= 4) throw error;
 
         let delay = 3000 * Math.pow(2, attempt - 1); // 3s, 6s, 12s
-        if (error.message.includes('429')) delay = 10000; // Fixed 10s for rate limits
+        const message = getErrorMessage(error);
+        if (message.includes('429')) delay = 10000; // Fixed 10s for rate limits
 
-        console.warn(`Embedding attempt ${attempt} failed: ${error.message}. Retrying in ${delay}ms...`);
+        console.warn(`Embedding attempt ${attempt} failed: ${message}. Retrying in ${delay}ms...`);
         await new Promise(r => setTimeout(r, delay));
         return getEmbeddingsWithRetry(texts, attempt + 1);
     }
@@ -143,10 +158,10 @@ export function adaptiveThreshold(intent: string): number {
  * Embeds query and all posts in a single batch call.
  */
 export async function semanticFilter(
-    posts: any[],
+    posts: RedditPost[],
     query: string,
     intentType: string = 'unknown'
-): Promise<any[]> {
+): Promise<RedditPost[]> {
     if (posts.length === 0) return [];
 
     try {
@@ -154,19 +169,21 @@ export async function semanticFilter(
         // For posts, combine title + snippet for better context
         const textsToEmbed = [
             query,
-            ...posts.map(p => `${p.title} ${p.selftext?.slice(0, 200) || ''}`)
+            ...posts.map((post) => `${post.title} ${post.selftext?.slice(0, 200) || ''}`)
         ];
 
         const embeddings = await getEmbeddings(textsToEmbed);
 
         const queryEmbedding = embeddings[0];
         const postEmbeddings = embeddings.slice(1);
+        if (!queryEmbedding) return [];
 
         const threshold = adaptiveThreshold(intentType);
 
         return posts.filter((post, index) => {
-            const score = cosineSimilarity(queryEmbedding, postEmbeddings[index]);
-            // Attach score for debugging/ranking
+            const postEmbedding = postEmbeddings[index];
+            if (!postEmbedding) return false;
+            const score = cosineSimilarity(queryEmbedding, postEmbedding);
             post.semanticScore = score;
             return score >= threshold;
         });
@@ -180,3 +197,4 @@ export async function semanticFilter(
         return [];
     }
 }
+import { RedditPost } from '@/types';

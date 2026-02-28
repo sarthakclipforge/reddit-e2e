@@ -5,10 +5,45 @@ import { searchReddit } from '@/lib/reddit';
 import { deduplicateWithBonus, heuristicScore } from '@/lib/heuristics';
 import { semanticFilter } from '@/lib/embeddings';
 import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
+import { ContextSearchResponse, RedditPost } from '@/types';
+
+function normalizeQuery(value: string): string {
+    return value.trim().replace(/\s+/g, ' ');
+}
+
+function buildSearchQueries(userQuery: string, aiQueries: string[]): string[] {
+    const base = normalizeQuery(userQuery);
+    const escapedPhrase = base.replace(/"/g, '\\"');
+    const queries: string[] = [];
+
+    if (base.includes(' ')) {
+        // Match exact phrase first to avoid drifting into loosely related keyword matches.
+        queries.push(`"${escapedPhrase}"`);
+    }
+    queries.push(base);
+
+    for (const query of aiQueries) {
+        const clean = normalizeQuery(query);
+        if (!clean) continue;
+
+        const alreadyIncluded = queries.some(
+            (existing) => existing.toLowerCase() === clean.toLowerCase()
+        );
+        if (alreadyIncluded) continue;
+
+        // Skip very broad OR-style expansions when the user query looks like a named entity phrase.
+        if (base.includes(' ') && /\bOR\b/i.test(clean)) continue;
+
+        queries.push(clean);
+    }
+
+    return queries.slice(0, 4);
+}
 
 export async function POST(req: NextRequest) {
     try {
-        const { query: userQuery } = await req.json();
+        const body = (await req.json()) as { query?: string };
+        const userQuery = typeof body.query === 'string' ? normalizeQuery(body.query) : '';
         const apiKey = req.headers.get('x-groq-api-key') || undefined;
 
         // 1. Validation
@@ -18,24 +53,27 @@ export async function POST(req: NextRequest) {
 
         // 2. Cache Check (Full Response)
         const cacheKey = makeCacheKey('filter', userQuery);
-        const cached = await cacheGet(cacheKey);
+        const cached = await cacheGet<ContextSearchResponse>(cacheKey);
         if (cached) {
             return NextResponse.json({ ...cached, cached: true });
         }
 
-        // 3. Intent Analysis
-        // Note: In a full pipeline, we might cache this separately, but here we run it part of the flow
-        const { queries } = await generateSearchQueries(userQuery, apiKey);
+        // 3. Intent Analysis (best-effort)
+        let aiQueries: string[] = [];
+        try {
+            const generated = await generateSearchQueries(userQuery, apiKey);
+            aiQueries = generated.queries;
+        } catch (error) {
+            console.warn('Intent query generation failed, falling back to exact query search:', error);
+        }
+        const queries = buildSearchQueries(userQuery, aiQueries);
 
         // 4. Distributed Search (Server-Side)
-        // Execute all 3 queries in parallel
-        const results = await Promise.allSettled([
-            searchReddit(queries[0], 25, 'relevance'), // Broad
-            searchReddit(queries[1], 25, 'relevance'), // Specific
-            searchReddit(queries[2], 25, 'relevance')  // Strategic
-        ]);
+        const results = await Promise.allSettled(
+            queries.map((query) => searchReddit(query, 25, 'relevance'))
+        );
 
-        const allResults = results.map(r => r.status === 'fulfilled' ? r.value : []);
+        const allResults = results.map((result) => (result.status === 'fulfilled' ? result.value : []));
 
         // 5. Deduplication & Heuristics
         const uniquePosts = deduplicateWithBonus(allResults);
@@ -66,20 +104,35 @@ export async function POST(req: NextRequest) {
         // 7. Pre-Ranking (Heuristic)
         // Sort by naive heuristic score to send best candidates to AI
         const preRanked = semanticallyFiltered
-            .map((p: any) => ({ ...p, hScore: heuristicScore(p) }))
-            .sort((a: any, b: any) => b.hScore - a.hScore)
+            .map((post: RedditPost) => ({ ...post, hScore: heuristicScore(post) }))
+            .sort((a, b) => (b.hScore || 0) - (a.hScore || 0))
             .slice(0, 30); // Cap at 30 for AI analysis
 
         // 7. AI Semantic Filtering
         const { filteredPosts } = await filterPostsByContext(preRanked, userQuery, apiKey);
 
         // 8. Final Scoring & Sort
-        // Combine AI Score (65%) and Relevance/Heuristic (35%) - Simplified for now to just use AI score threshold
-        const finalResults = filteredPosts
-            .filter(p => p.relevanceScore >= 6) // Threshold
-            .sort((a, b) => b.relevanceScore - a.relevanceScore);
+        // Step 1: keep only relevant posts (AI relevance >= 6).
+        // Step 2: within relevant posts, order by engagement (upvotes + comments).
+        const relevanceTier = (score: number) => (score >= 8 ? 2 : score >= 6 ? 1 : 0);
+        const engagementScore = (post: RedditPost) => post.upvotes + post.comments;
 
-        const response = {
+        const finalResults = filteredPosts
+            .filter((post) => (post.relevanceScore ?? 0) >= 6)
+            .sort((a, b) => {
+                const aRelevance = a.relevanceScore ?? 0;
+                const bRelevance = b.relevanceScore ?? 0;
+
+                const tierDiff = relevanceTier(bRelevance) - relevanceTier(aRelevance);
+                if (tierDiff !== 0) return tierDiff;
+
+                const engagementDiff = engagementScore(b) - engagementScore(a);
+                if (engagementDiff !== 0) return engagementDiff;
+
+                return bRelevance - aRelevance;
+            });
+
+        const response: ContextSearchResponse = {
             posts: finalResults,
             queryContext: queries,
             filterStats: {
@@ -87,7 +140,9 @@ export async function POST(req: NextRequest) {
                 semanticPass: semanticallyFiltered.length,
                 analyzed: preRanked.length,
                 output: finalResults.length
-            }
+            },
+            totalResults: finalResults.length,
+            query: userQuery,
         };
 
         // 9. Cache Success
@@ -97,10 +152,10 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json(response);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Filter API Error:', error);
         return NextResponse.json(
-            { error: 'Search Pipeline Failed', details: error.message },
+            { error: 'Search Pipeline Failed', details: error instanceof Error ? error.message : String(error) },
             { status: 500 }
         );
     }

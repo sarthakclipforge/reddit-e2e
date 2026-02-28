@@ -1,46 +1,45 @@
 /**
- * Client-side XLSX export using SheetJS.
+ * Client-side XLSX export using ExcelJS.
  * Generates and downloads an Excel file with Reddit post data.
  */
 
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { RedditPost } from '@/types';
 
 /**
  * Export Reddit posts to an XLSX file and trigger browser download.
  */
-export function exportToXLSX(posts: RedditPost[], keywords: string): void {
-    // Prepare data rows
-    const data = posts.map((post) => ({
-        Title: post.title,
-        Subreddit: post.subreddit,
-        Upvotes: post.upvotes,
-        Comments: post.comments,
-        Author: post.author,
-        'Posted Date': new Date(post.created).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-        }),
-        URL: post.link,
-    }));
+export async function exportToXLSX(posts: RedditPost[], keywords: string): Promise<void> {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Reddit Posts');
 
-    // Create workbook and worksheet
-    const worksheet = XLSX.utils.json_to_sheet(data);
-
-    // Set column widths for readability
-    worksheet['!cols'] = [
-        { wch: 60 },  // Title
-        { wch: 20 },  // Subreddit
-        { wch: 10 },  // Upvotes
-        { wch: 10 },  // Comments
-        { wch: 18 },  // Author
-        { wch: 15 },  // Posted Date
-        { wch: 50 },  // URL
+    worksheet.columns = [
+        { header: 'Title', key: 'title', width: 60 },
+        { header: 'Subreddit', key: 'subreddit', width: 20 },
+        { header: 'Upvotes', key: 'upvotes', width: 10 },
+        { header: 'Comments', key: 'comments', width: 10 },
+        { header: 'Author', key: 'author', width: 18 },
+        { header: 'Posted Date', key: 'created', width: 15 },
+        { header: 'URL', key: 'link', width: 50 },
     ];
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Reddit Posts');
+    worksheet.getRow(1).font = { bold: true };
+
+    for (const post of posts) {
+        worksheet.addRow({
+            title: post.title,
+            subreddit: post.subreddit,
+            upvotes: post.upvotes,
+            comments: post.comments,
+            author: post.author,
+            created: new Date(post.created).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+            }),
+            link: post.link,
+        });
+    }
 
     // Generate filename with sanitized keywords
     const sanitizedKeywords = keywords
@@ -50,6 +49,20 @@ export function exportToXLSX(posts: RedditPost[], keywords: string): void {
     const timestamp = new Date().toISOString().slice(0, 10);
     const filename = `reddit-search-${sanitizedKeywords}-${timestamp}.xlsx`;
 
-    // Trigger browser download
-    XLSX.writeFile(workbook, filename);
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob(
+        [buffer],
+        {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
