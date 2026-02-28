@@ -16,7 +16,7 @@ async function searchReddit(keywords: string, sort: string, time?: string): Prom
     return data;
 }
 
-export function useRedditSearch(keywords: string, sort: 'top' | 'hot', time?: string) {
+export function useRedditSearch(keywords: string, sort: 'top' | 'hot' | 'relevance', time?: string) {
     return useQuery<SearchResponse>({
         queryKey: ['reddit-search', keywords, sort, time],
         queryFn: () => searchReddit(keywords, sort, time),

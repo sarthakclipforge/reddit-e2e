@@ -20,7 +20,7 @@ import { ContentIdea, RedditPost } from '@/types';
 
 export default function SearchPage() {
     const [searchKeywords, setSearchKeywords] = useState('');
-    const [searchSort, setSearchSort] = useState<'top' | 'hot'>('top');
+    const [searchSort, setSearchSort] = useState<'top' | 'hot' | 'relevance'>('top');
     const [searchTime, setSearchTime] = useState('all');
     const [hasSearched, setHasSearched] = useState(false);
     const [isContextMode, setIsContextMode] = useState(false);
@@ -43,7 +43,7 @@ export default function SearchPage() {
     const error = isContextMode ? contextSearch.error : standardSearch.error;
     const data = isContextMode ? contextSearch.data : standardSearch.data;
 
-    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot', time?: string, contextMode: boolean = false, strictness?: number) => {
+    const handleSearch = useCallback((keywords: string, sort: 'top' | 'hot' | 'relevance', time?: string, contextMode: boolean = false, strictness?: number) => {
         setSearchKeywords(keywords);
         setSearchSort(sort);
         if (time) setSearchTime(time);
@@ -54,7 +54,7 @@ export default function SearchPage() {
 
         // If context mode, trigger it explicitly
         if (contextMode) {
-            contextSearch.search(keywords, strictness);
+            contextSearch.search(keywords, strictness, sort, time);
         }
     }, [contextSearch]);
 

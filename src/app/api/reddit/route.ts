@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
         // Parse query params
         const { searchParams } = new URL(request.url);
         const keywords = searchParams.get('keywords')?.trim();
-        const sort = searchParams.get('sort') as 'top' | 'hot' | null;
+        const sort = searchParams.get('sort') as 'top' | 'hot' | 'relevance' | null;
         const time = searchParams.get('time') || 'all';
 
         // Validate inputs
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        const sortType = sort === 'hot' ? 'hot' : 'top'; // Default to 'top'
+        const sortType = sort === 'hot' ? 'hot' : sort === 'relevance' ? 'relevance' : 'top'; // Default to 'top'
 
         // Check cache first
         const cacheKey = makeCacheKey('reddit-search', keywords, sortType, time);
@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Fetch from Reddit
-        const posts = await searchReddit(keywords, 25, sortType, time as any);
+        const posts = await searchReddit(keywords, 25, sortType, time);
 
         const response: SearchResponse = {
             posts,

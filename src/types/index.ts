@@ -17,7 +17,7 @@ export interface RedditPost {
 
 export interface SearchParams {
     keywords: string;
-    sort: 'top' | 'hot';
+    sort: 'top' | 'hot' | 'relevance';
     time?: string;
 }
 

@@ -49,7 +49,7 @@ export function deduplicateWithBonus(queryResults: any[][]): any[] {
  * Calculates a heuristic score for a post to pre-rank before AI analysis.
  * Uses defensive fallbacks to prevent NaN.
  */
-export function heuristicScore(post: any): number {
+export function heuristicScore(post: any, queryWords?: string[]): number {
     const upvotes = post.upvotes || post.ups || 0;          // support both mapped and raw
     const comments = post.comments || post.num_comments || 0;
     // `created` is an ISO string in RedditPost; fall back to raw UTC number
@@ -74,6 +74,14 @@ export function heuristicScore(post: any): number {
         // Boost factor: a 0.85 match gets a ~20x boost compared to a baseline 0.65 match
         const relevanceMultiplier = Math.pow(10, (semanticScore - 0.65) * 6);
         score = engagementScore * relevanceMultiplier;
+    }
+
+    // Keyword overlap bonus: boost posts whose titles contain the user's search terms
+    if (queryWords && queryWords.length > 0) {
+        const titleLower = (post.title || '').toLowerCase();
+        const matchCount = queryWords.filter(w => titleLower.includes(w)).length;
+        const keywordBoost = 1 + (matchCount / queryWords.length) * 1.5; // Up to 2.5x boost for full match
+        score *= keywordBoost;
     }
 
     // Guard against Infinity/NaN

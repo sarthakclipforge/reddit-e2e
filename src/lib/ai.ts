@@ -140,15 +140,21 @@ export async function generateSearchQueries(
     apiKeyOverride?: string
 ): Promise<{ queries: string[]; rateLimit: RateLimitInfo }> {
     const prompt = `
-You are a Reddit Search Expert. Translate this query into 3 boolean search queries.
+You are a Reddit Search Expert. Generate 3 search queries for Reddit's search engine.
 User Query: "${sanitizePostContent(userQuery)}"
+
+RULES:
+- Reddit search ONLY supports: plain keywords, "quoted exact phrases", and OR.
+- Do NOT use: site:, parentheses (), AND, NOT, -, intitle:, or any Google/Bing operators.
+- Each query must be a simple string of keywords or quoted phrases joined by OR.
+- Make each query target a different angle of the user's intent.
 
 Output JSON format:
 {
   "queries": [
-    "Broad query with OR",
-    "Specific field target query",
-    "Problem solving query"
+    "simple keyword query",
+    "\"exact phrase\" OR \"alternate phrase\"",
+    "problem-focused keyword query"
   ]
 }
 `;
@@ -191,12 +197,15 @@ export async function generatePostReasons(
     }));
 
     const prompt = `
-Context: "${sanitizePostContent(userQuery)}"
-Task: Write 1 short sentence why each post matches the context. Be direct.
+User's search query: "${sanitizePostContent(userQuery)}"
+Task: For each post, write 1 short sentence explaining HOW it answers the user's search query.
+
 CRITICAL RULES:
-1. Do NOT guess or hallucinate relationships. If a post shares a name (e.g. same last name) but does not clearly refer to the exact person or concept, return an empty string "".
-2. If a post does NOT directly and obviously match the context with concrete evidence, you MUST return an empty string "". 
-3. Never write "This post does not relate". Return "" instead.
+1. Your reason MUST reference the user's query and explain the connection. Example: "Discusses top languages for beginners, directly answering the query."
+2. Do NOT just copy or rephrase the post title. The reason must add value beyond the title.
+3. If a post does NOT clearly and directly relate to the search query, return an empty string "".
+4. Do NOT guess or hallucinate connections. If there is no obvious link, return "".
+5. Never write "This post does not relate". Return "" instead.
 
 Posts:
 ${JSON.stringify(postData)}
@@ -204,7 +213,7 @@ ${JSON.stringify(postData)}
 Output JSON:
 {
   "r": [
-    ["post_id", "Short reason."]
+    ["post_id", "Reason explaining how this post answers the search query."]
   ]
 }
 `;
@@ -322,13 +331,18 @@ export async function generateContentIdeas(
         .replace('{{SUBREDDIT}}', topic)
         .replace('{{DISCUSSIONS}}', discussionsText);
 
-    if (promptOverride && !prompt.includes('"hook"')) {
-        prompt += `\n\nIMPORTANT: Format the output as a JSON array of objects with the following keys:\n- "hook": A strong opening line.\n- "concept": The core idea.\n- "why": Why this works.\n- "cta": A suggested Call to Action.\n\nDo not include any explanation, just the JSON array.`;
+    // Fix 1: Auto-append data if user's custom prompt omitted the placeholder
+    if (promptOverride && !promptOverride.includes('{{DISCUSSIONS}}')) {
+        prompt += `\n\nHere is the data to analyze:\n${discussionsText}`;
+    }
+    if (promptOverride && !promptOverride.includes('{{SUBREDDIT}}')) {
+        prompt += `\n\nSubreddit: r/${topic}`;
     }
 
     const { content, rateLimit } = await callGroq(
         [
-            { role: 'system', content: 'You are a Viral Content Strategist.' },
+            // Fix 2: System message always enforces JSON schema
+            { role: 'system', content: 'You are a Viral Content Strategist. You MUST output valid JSON only. Output format: [{"hook":"...","concept":"...","why":"...","cta":"..."}]. No explanations, no extra text.' },
             { role: 'user', content: prompt },
         ],
         0.7,
@@ -356,18 +370,24 @@ export async function generateViralHooks(
     const promptTemplate = promptOverride || DEFAULT_HOOKS_PROMPT;
     const discussionsText = discussions.join('\n\n---\n\n');
 
-    const prompt = promptTemplate.replace('{{DISCUSSIONS}}', discussionsText);
+    let prompt = promptTemplate.replace('{{DISCUSSIONS}}', discussionsText);
+
+    // Fix 1: Auto-append data if user's custom prompt omitted the placeholder
+    if (promptOverride && !promptOverride.includes('{{DISCUSSIONS}}')) {
+        prompt += `\n\nHere is the data to analyze:\n${discussionsText}`;
+    }
 
     const { content, rateLimit } = await callGroq(
         [
-            { role: 'system', content: 'You are a Viral Hook Expert.' },
+            // Fix 2: System message always enforces JSON schema
+            { role: 'system', content: 'You are a Viral Hook Expert. You MUST output valid JSON only. Output format: ["hook1", "hook2", ...]. No explanations, no extra text.' },
             { role: 'user', content: prompt },
         ],
         0.8,
         apiKeyOverride
     );
 
-    // The model may return a plain array ["hook1",..] or {hooks:["hook1",..]}
+    // The model may return a plain array ["hook1",..] or {hooks:["hook1",..]}  
     const parsed = safeParseJSON<string[] | { hooks: string[] }>(content, []);
     let hooks: string[] = [];
     if (Array.isArray(parsed)) {
@@ -391,14 +411,18 @@ export async function generateVideoScripts(
         .replace('{{HOOK}}', hook)
         .replace('{{CONCEPT}}', concept);
 
-    // If the user provided a custom prompt but stripped out the JSON schema, forcefully append it
-    if (promptOverride && !prompt.includes('"variation1"')) {
-        prompt += `\n\nIMPORTANT: Return the output as a JSON object with two keys:\n- "variation1": The full script text for Variation 1. Use \\n for line breaks.\n- "variation2": The full script text for Variation 2. Use \\n for line breaks.\n\nNo explanations. No extra commentary. Just the JSON object.`;
+    // Fix 1: Auto-append data if user's custom prompt omitted the placeholders
+    if (promptOverride && !promptOverride.includes('{{HOOK}}')) {
+        prompt += `\n\nSelected Hook:\n"${hook}"`;
+    }
+    if (promptOverride && !promptOverride.includes('{{CONCEPT}}')) {
+        prompt += `\n\nSelected Idea:\n"${concept}"`;
     }
 
     const { content, rateLimit } = await callGroq(
         [
-            { role: 'system', content: 'You are a Video Script Writer.' },
+            // Fix 2: System message always enforces JSON schema
+            { role: 'system', content: 'You are a Video Script Writer. You MUST output valid JSON only. Output format: {"variation1":"script text here","variation2":"script text here"}. Use \\n for line breaks within scripts. No explanations, no extra text.' },
             { role: 'user', content: prompt },
         ],
         0.7,

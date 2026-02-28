@@ -7,7 +7,7 @@ import { cacheGet, cacheSet, makeCacheKey, TTL } from '@/lib/cache';
 
 export async function POST(req: NextRequest) {
     try {
-        const { query: userQuery, strictness } = await req.json();
+        const { query: userQuery, strictness, sort, time } = await req.json();
         const apiKey = req.headers.get('x-groq-api-key') || undefined;
 
         // 1. Validation
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 2. Cache Check (Full Response)
-        const cacheKey = makeCacheKey('filter', `${userQuery}__s${strictness ?? 'default'}`);
+        const cacheKey = makeCacheKey('filter', `${userQuery}__s${strictness ?? 'default'}__${sort ?? 'relevance'}__${time ?? 'all'}`);
         const cached = await cacheGet(cacheKey);
         if (cached) {
             return NextResponse.json({ ...cached, cached: true });
@@ -26,10 +26,16 @@ export async function POST(req: NextRequest) {
         const { queries } = await generateSearchQueries(userQuery, apiKey);
 
         // 4. Distributed Search (Server-Side) — only call for valid query strings
-        // Guard: if AI returned fewer than 3 queries, don't pass undefined to searchReddit
+        // Always include the user's original query alongside AI-generated ones for keyword accuracy
         const validQueries = queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
+        const allQueries = [userQuery, ...validQueries.filter(q => q.toLowerCase() !== userQuery.toLowerCase())].slice(0, 4);
+
+        // Context Mode: force relevance sort and default to 'year' for fresher results
+        const contextSort = 'relevance';
+        const contextTime = time || 'year';
+
         const results = await Promise.allSettled(
-            validQueries.map(q => searchReddit(q, 25, 'relevance'))
+            allQueries.map(q => searchReddit(q, 50, contextSort, contextTime))
         );
 
         const allResults = results.map(r => r.status === 'fulfilled' ? r.value : []);
@@ -44,12 +50,16 @@ export async function POST(req: NextRequest) {
         // 6. Semantic Filtering (local embeddings — 0 tokens)
         const semanticallyFiltered = await semanticFilter(uniquePosts, userQuery, 'unknown', strictness);
 
-        // 7. Final Ranking — heuristic score only (AI re-scoring removed to save ~2,100 tokens/search)
+        // 7. Final Ranking — heuristic score with keyword overlap bonus
         // If semantic filter produced nothing (very niche query), fall back to heuristic-sorted raw posts.
         const postsToRank = semanticallyFiltered.length > 0 ? semanticallyFiltered : uniquePosts;
 
+        // Extract query keywords for keyword overlap bonus (strip common stop words)
+        const stopWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'for', 'of', 'to', 'in', 'is', 'it', 'on', 'at', 'by', 'as', 'with', 'how', 'what', 'why', 'when', 'who', 'which', 'that', 'this', 'are', 'was', 'be', 'do', 'i', 'my', 'me']);
+        const queryWords = userQuery.toLowerCase().split(/\s+/).filter((w: string) => w.length > 2 && !stopWords.has(w));
+
         let finalResults = postsToRank
-            .map((p: any) => ({ ...p, hScore: heuristicScore(p) }))
+            .map((p: any) => ({ ...p, hScore: heuristicScore(p, queryWords) }))
             .sort((a: any, b: any) => b.hScore - a.hScore)
             .slice(0, 25)
             .map((p: any) => ({

@@ -2,7 +2,43 @@
 import { RedditPost } from '@/types';
 
 const REDDIT_SEARCH_URL = 'https://www.reddit.com/search.json';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0',
+];
+
+function getRandomUserAgent(): string {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+/**
+ * Maps a UI time range to the nearest broader Reddit-native time filter + a cutoff timestamp.
+ * Reddit only supports: hour, day, week, month, year, all.
+ * Custom ranges like '15d' need to fetch a broader set and then filter locally.
+ */
+function resolveTimeRange(time: string): { redditTime: string; cutoffMs: number | null } {
+    const now = Date.now();
+    switch (time) {
+        case '15d':
+            return { redditTime: 'month', cutoffMs: now - 15 * 24 * 60 * 60 * 1000 };
+        case 'hour':
+        case 'day':
+        case 'week':
+        case 'month':
+        case 'year':
+        case 'all':
+            return { redditTime: time, cutoffMs: null };
+        default:
+            return { redditTime: 'all', cutoffMs: null };
+    }
+}
 
 /**
  * Wraps fetch with a timeout to prevent hanging requests.
@@ -29,13 +65,18 @@ export async function searchReddit(
     query: string,
     limit: number = 25,
     sort: 'relevance' | 'hot' | 'top' | 'new' = 'relevance',
-    time: 'all' | 'year' | 'month' | 'week' | 'day' | 'hour' = 'all'
+    time: string = 'all'
 ): Promise<RedditPost[]> {
+    const { redditTime, cutoffMs } = resolveTimeRange(time);
+
+    // If we need to post-filter, fetch more to compensate for discarded results
+    const fetchLimit = cutoffMs ? Math.min(100, limit * 3) : limit;
+
     const params = new URLSearchParams({
         q: query,
-        limit: limit.toString(),
+        limit: fetchLimit.toString(),
         sort: sort,
-        t: time,
+        t: redditTime,
         type: 'link', // Only posts, no subreddits/users
         include_over_18: 'off'
     });
@@ -45,7 +86,7 @@ export async function searchReddit(
     try {
         const res = await fetchWithTimeout(url, {
             headers: {
-                'User-Agent': USER_AGENT
+                'User-Agent': getRandomUserAgent()
             }
         });
 
@@ -62,7 +103,7 @@ export async function searchReddit(
         // Defensive Mapping
         const children = data?.data?.children || [];
 
-        return children.map((child: any) => {
+        const posts = children.map((child: any) => {
             const p = child?.data || {};
             return {
                 id: p.name || `t3_${Math.random().toString(36).substr(2, 9)}`,
@@ -78,6 +119,14 @@ export async function searchReddit(
                 thumbnail: p.thumbnail && p.thumbnail.startsWith('http') ? p.thumbnail : null
             } as RedditPost;
         });
+
+        // Apply custom date cutoff if needed (e.g., 15d)
+        let filtered = posts;
+        if (cutoffMs) {
+            filtered = posts.filter(p => new Date(p.created).getTime() >= cutoffMs);
+        }
+
+        return filtered.slice(0, limit);
 
     } catch (error) {
         console.error('Reddit Search Failed:', error);
@@ -107,7 +156,7 @@ export async function getPostDetails(permalink: string): Promise<string> {
 
     try {
         const res = await fetchWithTimeout(url, {
-            headers: { 'User-Agent': USER_AGENT }
+            headers: { 'User-Agent': getRandomUserAgent() }
         });
 
         if (!res.ok) {

@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const { scripts, rateLimit } = await generateVideoScripts(hook, concept, scriptsPrompt || undefined, apiKeyOverride);
+        const { scripts, rateLimit } = await generateVideoScripts(hook, concept, scriptsPrompt?.trim() ? scriptsPrompt : undefined, apiKeyOverride);
 
         return NextResponse.json({ ...scripts, rateLimit });
     } catch (error) {

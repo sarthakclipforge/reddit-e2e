@@ -148,6 +148,22 @@ export default function PromptEditor() {
                                     ))}
                                 </div>
 
+                                {/* Fix 4: Placeholder validation warning */}
+                                {isModified(section.key) && (() => {
+                                    const currentPrompt = prompts[section.key] || '';
+                                    const missing = section.placeholders.filter(ph => !currentPrompt.includes(ph));
+                                    if (missing.length === 0) return null;
+                                    return (
+                                        <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2">
+                                            <span className="shrink-0 mt-0.5">⚠️</span>
+                                            <div>
+                                                <span>Missing: {missing.map(m => <code key={m} className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded font-mono text-[10px] mx-0.5">{m}</code>)}</span>
+                                                <span className="text-amber-500 block mt-0.5">Data will be auto-appended, but placing variables gives you control over where they appear.</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
                                 {/* Actions */}
                                 <div className="flex items-center gap-2 pt-1">
                                     <Button

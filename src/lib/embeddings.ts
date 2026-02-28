@@ -4,7 +4,7 @@
  * Includes concurrency limiting, retries, and batch processing.
  */
 
-const HF_API_URL = 'https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5';
+const HF_API_URL = 'https://router.huggingface.co/hf-inference/models/BAAI/bge-base-en-v1.5';
 
 class ConcurrencyLimiter {
     private maxConcurrent: number;
@@ -50,7 +50,7 @@ class ConcurrencyLimiter {
 // 2 Concurrent Requests Limit for HuggingFace Free Tier
 const limiter = new ConcurrencyLimiter(2);
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeout = 5000): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit, timeout = 15000): Promise<Response> {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
     try {
@@ -186,7 +186,8 @@ export async function semanticFilter(
             .map(s => s.post);
 
     } catch (error) {
-        console.error('Semantic filter failed — returning all posts unfiltered:', error);
+        console.error('⚠️ Semantic filter FAILED OPEN — returning all posts unfiltered:', error);
+        console.warn(`   This means ${posts.length} posts bypassed semantic filtering entirely.`);
         // Fail open: if the embedding API errors, return all posts so the user
         // still gets results rather than a silent empty state.
         return posts;

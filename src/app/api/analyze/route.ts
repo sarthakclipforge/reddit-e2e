@@ -53,8 +53,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Run sequentially (not parallel) to avoid burning through the per-minute token limit
-        const ideasResult = await generateContentIdeas(topic, validDiscussions, ideasPrompt || undefined, apiKeyOverride);
-        const hooksResult = await generateViralHooks(validDiscussions, hooksPrompt || undefined, apiKeyOverride);
+        const ideasResult = await generateContentIdeas(topic, validDiscussions, ideasPrompt?.trim() ? ideasPrompt : undefined, apiKeyOverride);
+        const hooksResult = await generateViralHooks(validDiscussions, hooksPrompt?.trim() ? hooksPrompt : undefined, apiKeyOverride);
 
         // Distribute hooks across ideas (2 per idea)
         const ideas = ideasResult.ideas.map((idea, i) => {
