@@ -7,6 +7,7 @@ const HF_API_URLS = [
     'https://router.huggingface.co/hf-inference/models/BAAI/bge-base-en-v1.5',
     'https://api-inference.huggingface.co/models/BAAI/bge-base-en-v1.5',
 ];
+const HF_USER_AGENT = 'reddit-scraper/1.0 (+https://github.com/AritraBose10/reddit)';
 const EMBEDDING_BATCH_SIZE = 10;
 
 class ConcurrencyLimiter {
@@ -85,7 +86,8 @@ async function getEmbeddingsWithRetry(texts: string[], attempt = 1): Promise<num
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'User-Agent': HF_USER_AGENT,
             },
             body: JSON.stringify({
                 inputs: texts,
