@@ -23,7 +23,18 @@ export async function POST(req: NextRequest) {
         }
 
         // 3. Intent Analysis — uses llama-3.1-8b-instant (cheap, fast)
-        const { queries } = await generateSearchQueries(userQuery, apiKey);
+        // Fail-soft: if AI query expansion fails, continue with the user's query.
+        let queries: string[] = [userQuery];
+        try {
+            const intentResult = await generateSearchQueries(userQuery, apiKey);
+            const validIntentQueries = intentResult.queries
+                .filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
+            if (validIntentQueries.length > 0) {
+                queries = validIntentQueries;
+            }
+        } catch (intentError) {
+            console.warn('Intent analysis failed; continuing with original query only.', intentError);
+        }
 
         // 4. Distributed Search (Server-Side) — only call for valid query strings
         // Always include the user's original query alongside AI-generated ones for keyword accuracy
