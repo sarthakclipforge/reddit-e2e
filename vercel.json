@@ -7,6 +7,5 @@
         "NODE_ENV": {
             "value": "production"
         }
-    },
-    "envPrefix": "NEXT_PUBLIC_"
+    }
 }
